@@ -48,10 +48,40 @@ function hasCallUI() {
   const selectors = [
     '[data-icon="call-hangup"]',
     '[data-icon="call-hangup-filled"]',
+    '[data-icon="decline"]',
+    '[data-icon="audio-mute"]',
+    '[data-icon="video-off"]',
+    // English
     '[aria-label*="End call" i]',
     '[aria-label*="Hang up" i]',
+    '[aria-label*="Decline" i]',
+    '[aria-label*="Leave call" i]',
+    // Spanish
+    '[aria-label*="Terminar" i]',
+    '[aria-label*="Colgar" i]',
+    '[aria-label*="Finalizar" i]',
+    '[aria-label*="Rechazar" i]',
+    // Russian
+    '[aria-label*="Завершить" i]',
     '[aria-label*="Заверш" i]',
     '[aria-label*="Полож" i]',
+    '[aria-label*="Отклонить" i]',
+    // Portuguese
+    '[aria-label*="Encerrar" i]',
+    '[aria-label*="Desligar" i]',
+    // Polish
+    '[aria-label*="Zakończ" i]',
+    '[aria-label*="Rozłącz" i]',
+    '[aria-label*="Odrzuć" i]',
+    // Ukrainian
+    '[aria-label*="Завершити" i]',
+    '[aria-label*="Покласти" i]',
+    '[aria-label*="Відхилити" i]',
+    // German
+    '[aria-label*="Anruf beenden" i]',
+    '[aria-label*="Auflegen" i]',
+    '[aria-label*="Ablehnen" i]',
+    '[aria-label*="Beenden" i]',
   ];
   for (const sel of selectors) {
     try { if (document.querySelector(sel)) return true; } catch (e) {}
@@ -80,7 +110,7 @@ function wrapGetUserMedia() {
   md.getUserMedia = async (constraints) => {
     try {
       const audio = !!(constraints && (constraints.audio === true || (typeof constraints.audio === 'object' && constraints.audio)));
-      if (audio) notify('wa:mic-on', {});
+      if (audio) { dbg('getUserMedia audio=true'); notify('wa:mic-on', {}); }
     } catch (e) {}
     const stream = await original(constraints);
     try {
@@ -132,11 +162,28 @@ function observeCallState() {
   let inCall = false;
   let endTimer = null;
 
+  let _dumpTick = 0;
   const check = () => {
-    const nowInCall = hasCallUI() || hasAudioElementsWithTracks();
+    _dumpTick++;
+    if (_dumpTick % 3 === 0) {
+      try {
+        const btns = Array.from(document.querySelectorAll('button,div[role="button"]'))
+          .map(el => (el.getAttribute('aria-label') || el.getAttribute('data-icon') || '').trim())
+          .filter(Boolean).slice(0, 20);
+        const audioEls = Array.from(document.querySelectorAll('audio')).map(a => {
+          const tracks = a.srcObject && a.srcObject.getAudioTracks ? a.srcObject.getAudioTracks().length : 0;
+          return 'audio:tracks=' + tracks;
+        });
+        dbg('DOM-scan btns=' + JSON.stringify(btns) + ' audio=' + JSON.stringify(audioEls));
+      } catch(e) {}
+    }
+    const uiFound = hasCallUI();
+    const audioFound = hasAudioElementsWithTracks();
+    const nowInCall = uiFound || audioFound;
     if (nowInCall && !inCall) {
       inCall = true;
       if (endTimer) { clearTimeout(endTimer); endTimer = null; }
+      dbg('call-started uiFound=' + uiFound + ' audioFound=' + audioFound);
       notify('wa:call-started', {});
     }
     if (!nowInCall && inCall) {

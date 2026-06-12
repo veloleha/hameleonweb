@@ -3,7 +3,29 @@ const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
 
-const { path: ffmpegPath } = require('@ffmpeg-installer/ffmpeg');
+const { path: _ffmpegPathRaw } = require('@ffmpeg-installer/ffmpeg');
+const ffmpegPath = (() => {
+  const log = (msg) => { try { require('fs').appendFileSync(require('path').join(require('os').tmpdir(), 'hameleonweb-ffmpeg.log'), msg + '\n'); } catch(e){} };
+  log('=== ffmpeg resolve start ===');
+  log('raw: ' + _ffmpegPathRaw);
+  log('resourcesPath: ' + process.resourcesPath);
+  try {
+    const unpacked = _ffmpegPathRaw.replace(/app\.asar([/\\])/, 'app.asar.unpacked$1');
+    const exists1 = require('fs').existsSync(unpacked);
+    log('unpacked: ' + unpacked + ' exists=' + exists1);
+    if (exists1) { log('using: ' + unpacked); return unpacked; }
+
+    if (process.resourcesPath) {
+      const rel = _ffmpegPathRaw.replace(/^.*node_modules/, 'node_modules');
+      const viaResources = require('path').join(process.resourcesPath, 'app.asar.unpacked', rel);
+      const exists2 = require('fs').existsSync(viaResources);
+      log('viaResources: ' + viaResources + ' exists=' + exists2);
+      if (exists2) { log('using: ' + viaResources); return viaResources; }
+    }
+  } catch (e) { log('error: ' + e.message); }
+  log('fallback: ' + _ffmpegPathRaw);
+  return _ffmpegPathRaw;
+})();
 
 function pad2(n) {
   return String(n).padStart(2, '0');
@@ -622,8 +644,11 @@ class Recorder {
   }
 
   startCandidateRecording(accountId, cfg) {
+    const _log = (msg) => { try { fs.appendFileSync(path.join(require('os').tmpdir(), 'hameleonweb-rec.log'), new Date().toISOString() + ' ' + msg + '\n'); } catch(e){} };
+    _log('startCandidateRecording accountId=' + accountId + ' cfg=' + JSON.stringify(cfg));
+    _log('ffmpegPath=' + ffmpegPath + ' exists=' + fs.existsSync(ffmpegPath));
     const current = this.byAccount.get(accountId);
-    if (current && current.state === 'recording') return;
+    if (current && current.state === 'recording') { _log('already recording, skip'); return; }
 
     const now = new Date();
     const dayFolder = formatDateFolder(now);
@@ -766,6 +791,7 @@ class Recorder {
       const spk = dshowInput(speakerName);
 
       if (!mic) {
+        _log('no mic found, aborting. micName=' + micName + ' devices=' + JSON.stringify(this._listDshowAudioDevicesSync()));
         return;
       }
 

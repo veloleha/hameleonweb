@@ -423,6 +423,7 @@ function registerIpc(userDataPath, recorder) {
     try {
       console.log('[wa:debug]', { accountId, msg });
     } catch (e) {}
+    _mainLog('wa:debug accountId=' + accountId + ' msg=' + msg);
   });
 
   ipcMain.on('wa:tab-recorder-error', (_e, { accountId, error }) => {
@@ -527,11 +528,16 @@ function registerIpc(userDataPath, recorder) {
     return { ok: true };
   });
 
+  const _mainLog = (msg) => { try { fs.appendFileSync(path.join(os.tmpdir(), 'hameleonweb-main.log'), new Date().toISOString() + ' ' + msg + '\n'); } catch(e){} };
+  _mainLog('IPC handlers registered');
+
   ipcMain.on('wa:mic-on', (_e, { accountId }) => {
     try {
       console.log('[wa:mic-on]', { accountId });
     } catch (e) {}
+    _mainLog('wa:mic-on accountId=' + accountId);
     const settings = loadSettings(userDataPath);
+    _mainLog('alwaysRecord=' + settings.alwaysRecord);
     if (!settings.alwaysRecord) return;
 
     const accounts = loadAccounts(userDataPath);
@@ -560,6 +566,7 @@ function registerIpc(userDataPath, recorder) {
     try {
       console.log('[wa:call-started]', { accountId });
     } catch (e) {}
+    _mainLog('wa:call-started accountId=' + accountId);
     const settings = loadSettings(userDataPath);
 
     if (settings.alwaysRecord) {

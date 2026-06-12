@@ -16,11 +16,13 @@
     "electron-builder": "^24.13.3"
   },
   "build": {
-    "appId": "com.example.whatsappmanager",
-    "productName": "WhatsAppManager",
+    "appId": "com.hameleonweb.app",
+    "productName": "hameleonweb",
     "files": [
       "src/**/*",
       "node_modules/@ffmpeg-installer/**/*",
+      "hameleonweb.png",
+      "hameleonweb.ico",
       "package.json"
     ],
     "asar": true,
@@ -30,7 +32,10 @@
       "**/*.dll"
     ],
     "win": {
-      "target": "nsis"
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ]
     }
   }
 }
