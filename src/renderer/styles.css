@@ -1,0 +1,178 @@
+html,
+body {
+  height: 100%;
+  margin: 0;
+  font-family: Segoe UI, Arial, sans-serif;
+  background: #0b141a;
+  color: #e9edef;
+}
+
+#app {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+}
+
+#sidebar {
+  width: 280px;
+  background: #111b21;
+  border-right: 1px solid #1f2c33;
+  display: flex;
+  flex-direction: column;
+}
+
+#content {
+  flex: 1;
+  position: relative;
+  background: #0b141a;
+}
+
+.placeholder {
+  padding: 20px;
+  opacity: 0.7;
+}
+
+.sidebar-header {
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid #1f2c33;
+}
+
+.title {
+  font-weight: 600;
+}
+
+.section {
+  padding: 12px;
+  overflow: auto;
+  flex: 1;
+}
+
+.section-title {
+  font-size: 12px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  opacity: 0.75;
+  margin-bottom: 8px;
+}
+
+.sidebar-footer {
+  padding: 12px;
+  border-top: 1px solid #1f2c33;
+}
+
+.account {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.account:hover {
+  background: #1f2c33;
+}
+
+.account.active {
+  background: #2a3942;
+}
+
+.account .name {
+  flex: 1;
+  min-width: 0;
+  margin-right: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.account-rename-input {
+  width: 100%;
+}
+
+.account .actions {
+  display: flex;
+  gap: 6px;
+}
+
+.btn {
+  border: 0;
+  background: #00a884;
+  color: #00100c;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.btn.secondary {
+  background: #1f2c33;
+  color: #e9edef;
+  font-weight: 500;
+}
+
+.btn.danger {
+  background: #a8002a;
+  color: #fff;
+}
+
+.input {
+  width: 100%;
+  background: #0b141a;
+  border: 1px solid #1f2c33;
+  color: #e9edef;
+  padding: 8px;
+  border-radius: 8px;
+}
+
+.textarea {
+  width: 100%;
+  background: #0b141a;
+  border: 1px solid #1f2c33;
+  color: #e9edef;
+  padding: 8px;
+  border-radius: 8px;
+  resize: vertical;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.field {
+  margin-bottom: 14px;
+}
+
+.label {
+  margin-bottom: 6px;
+  opacity: 0.9;
+}
+
+.settings {
+  position: absolute;
+  inset: 0;
+  padding: 16px;
+  overflow: auto;
+}
+
+.hidden {
+  display: none;
+}
+
+.mono {
+  font-family: Consolas, ui-monospace, Menlo, Monaco, monospace;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.hint {
+  opacity: 0.7;
+  margin-top: 6px;
+  font-size: 12px;
+}

@@ -1,0 +1,36 @@
+{
+  "name": "whatsapp-manager",
+  "version": "0.1.0",
+  "private": true,
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "dependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.example.whatsappmanager",
+    "productName": "WhatsAppManager",
+    "files": [
+      "src/**/*",
+      "node_modules/@ffmpeg-installer/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/@ffmpeg-installer/**/*",
+      "**/*.exe",
+      "**/*.dll"
+    ],
+    "win": {
+      "target": "nsis"
+    }
+  }
+}
