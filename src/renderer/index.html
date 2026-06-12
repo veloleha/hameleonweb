@@ -3,14 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>WhatsApp Manager</title>
+    <title>hameleonweb</title>
     <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="branding.css" />
   </head>
   <body>
     <div id="app">
       <div id="sidebar">
         <div class="sidebar-header">
-          <div class="title">WhatsApp Manager</div>
+          <div class="brand">
+            <img class="brand-logo" src="hameleonweb.png" alt="logo" />
+            <span class="title">hameleonweb</span>
+          </div>
           <div class="row">
             <button id="btnReload" class="btn secondary">Reload</button>
             <button id="btnSettings" class="btn secondary">Settings</button>
@@ -29,7 +33,9 @@
 
       <div id="content">
         <div id="contentPlaceholder" class="placeholder">
-          Select an account to show WhatsApp Web.
+          <img class="welcome-logo" src="hameleonweb.png" alt="hameleonweb" />
+          <div class="welcome-title">hameleonweb</div>
+          <div class="welcome-hint">Select an account to show WhatsApp Web.</div>
         </div>
 
         <div id="settingsPanel" class="settings hidden">
