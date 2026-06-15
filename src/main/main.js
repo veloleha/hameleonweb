@@ -22,8 +22,10 @@ app.commandLine.appendSwitch('auto-select-desktop-capture-source', 'Entire scree
 let mainWindow = null;
 let activeAccountId = null;
 let activeView = null;
+let currentSidebarWidth = SIDEBAR_WIDTH;
 
 const viewsByAccountId = new Map();
+const callMetaByAccountId = new Map();
 
 const WA_AUDIO_EXTENSION_ID = 'pddjlpangidimliafldcpfkbkifmegbd';
 const loadedExtensionsByPartition = new Set();
@@ -150,6 +152,7 @@ function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    icon: path.join(__dirname, '..', '..', 'hameleonweb.png'),
     webPreferences: {
       preload: rendererPreloadPath(),
       contextIsolation: true,
@@ -163,25 +166,27 @@ function createMainWindow() {
     mainWindow = null;
   });
 
-  mainWindow.on('resize', () => {
-    layoutActiveView();
+  mainWindow.on('resize', async () => {
+    await layoutActiveView();
   });
 }
 
-function layoutActiveView() {
+async function layoutActiveView() {
   if (!mainWindow || !activeView) return;
 
   const bounds = mainWindow.getContentBounds();
-  const x = SIDEBAR_WIDTH;
+  const sidebarWidth = Number(currentSidebarWidth) || SIDEBAR_WIDTH;
+
+  const x = sidebarWidth;
   const y = TOPBAR_HEIGHT;
-  const width = Math.max(0, bounds.width - SIDEBAR_WIDTH);
+  const width = Math.max(0, bounds.width - sidebarWidth);
   const height = Math.max(0, bounds.height - TOPBAR_HEIGHT);
 
   activeView.setBounds({ x, y, width, height });
   activeView.setAutoResize({ width: true, height: true });
 }
 
-function showAccountView(userDataPath, account) {
+async function showAccountView(userDataPath, account) {
   if (!mainWindow) return;
 
   activeAccountId = account.id;
@@ -266,7 +271,7 @@ function showAccountView(userDataPath, account) {
 
   activeView = view;
   mainWindow.addBrowserView(activeView);
-  layoutActiveView();
+  await layoutActiveView();
 }
 
 function hideAccountView() {
@@ -300,6 +305,24 @@ function sanitizeName(s) {
     .slice(0, 60);
 }
 
+function sanitizePhoneLabel(s) {
+  const base = String(s || '').trim();
+  if (!base) return '';
+  const digits = base.replace(/[^\d+]/g, '');
+  if (!digits) return '';
+  return digits.slice(0, 32);
+}
+
+function buildRecordingMeta(accountName, peerLabel) {
+  const meta = {
+    accountName: sanitizeName(accountName),
+    peerLabel: sanitizeName(peerLabel),
+    peerNumber: sanitizePhoneLabel(peerLabel),
+  };
+  if (!meta.peerNumber && !meta.peerLabel) return meta;
+  return meta;
+}
+
 function registerIpc(userDataPath, recorder) {
   ipcMain.handle('accounts:list', () => {
     return loadAccounts(userDataPath);
@@ -313,6 +336,43 @@ function registerIpc(userDataPath, recorder) {
   ipcMain.handle('accounts:rename', (_e, { id, name }) => {
     const a = renameAccount(userDataPath, id, name);
     return { accounts: loadAccounts(userDataPath), updated: a };
+  });
+
+  ipcMain.handle('accounts:update', (_e, { id, data }) => {
+    const accounts = loadAccounts(userDataPath);
+    const accountIndex = accounts.findIndex((a) => a.id === id);
+    
+    if (accountIndex === -1) {
+      return { accounts: loadAccounts(userDataPath), updated: null };
+    }
+    
+    // Update account with new data
+    accounts[accountIndex] = { ...accounts[accountIndex], ...data };
+    saveAccounts(userDataPath, accounts);
+    
+    return { accounts: loadAccounts(userDataPath), updated: accounts[accountIndex] };
+  });
+
+  ipcMain.handle('layout:getSidebarWidth', () => {
+    return currentSidebarWidth;
+  });
+
+  ipcMain.handle('layout:updateViewBounds', async () => {
+    if (activeView) {
+      await layoutActiveView();
+      return { success: true };
+    }
+    return { success: false };
+  });
+
+  ipcMain.handle('layout:setSidebarWidth', async (_e, { width }) => {
+    const parsed = Number(width);
+    if (Number.isFinite(parsed) && parsed >= 200 && parsed <= 500) {
+      currentSidebarWidth = parsed;
+      await layoutActiveView();
+      return { success: true, width: currentSidebarWidth };
+    }
+    return { success: false, width: currentSidebarWidth };
   });
 
   ipcMain.handle('accounts:delete', async (_e, { id }) => {
@@ -341,11 +401,11 @@ function registerIpc(userDataPath, recorder) {
     return { accounts: deleteAccount(userDataPath, id) };
   });
 
-  ipcMain.handle('view:selectAccount', (_e, { id }) => {
+  ipcMain.handle('view:selectAccount', async (_e, { id }) => {
     const accounts = loadAccounts(userDataPath);
     const account = accounts.find((a) => a.id === id);
     if (!account) return { ok: false };
-    showAccountView(userDataPath, account);
+    await showAccountView(userDataPath, account);
     return { ok: true };
   });
 
@@ -477,11 +537,13 @@ function registerIpc(userDataPath, recorder) {
     const account = accounts.find((a) => a.id === accountId);
     if (!account) return;
 
+    const callMeta = callMetaByAccountId.get(accountId) || {};
+
     recorder.startTabRecording(
       accountId,
       {
         recordingsPath: ensureRecordingsPath(settings, userDataPath),
-        accountName: sanitizeName(account.name),
+        ...buildRecordingMeta(account.name, callMeta.peerLabel),
         mp3Quality: settings.mp3Quality,
       },
       { mimeType },
@@ -544,9 +606,11 @@ function registerIpc(userDataPath, recorder) {
     const account = accounts.find((a) => a.id === accountId);
     if (!account) return;
 
+    const callMeta = callMetaByAccountId.get(accountId) || {};
+
     recorder.startCandidateRecording(accountId, {
       recordingsPath: ensureRecordingsPath(settings, userDataPath),
-      accountName: sanitizeName(account.name),
+      ...buildRecordingMeta(account.name, callMeta.peerLabel),
       micDevice: settings.micDevice,
       speakerDevice: settings.speakerDevice,
       mp3Quality: settings.mp3Quality,
@@ -560,19 +624,25 @@ function registerIpc(userDataPath, recorder) {
       console.log('[wa:mic-off]', { accountId });
     } catch (e) {}
     recorder.stopIfRecording(accountId, { deleteIfUnconfirmed: true });
+    callMetaByAccountId.delete(accountId);
   });
 
-  ipcMain.on('wa:call-started', (_e, { accountId }) => {
+  ipcMain.on('wa:call-started', (_e, { accountId, peerLabel }) => {
     try {
-      console.log('[wa:call-started]', { accountId });
+      console.log('[wa:call-started]', { accountId, peerLabel });
     } catch (e) {}
-    _mainLog('wa:call-started accountId=' + accountId);
+    _mainLog('wa:call-started accountId=' + accountId + ' peerLabel=' + String(peerLabel || ''));
     const settings = loadSettings(userDataPath);
+
+    if (peerLabel) {
+      callMetaByAccountId.set(accountId, { peerLabel: String(peerLabel) });
+    }
 
     if (settings.alwaysRecord) {
       const accounts = loadAccounts(userDataPath);
       const account = accounts.find((a) => a.id === accountId);
       if (account) {
+        const callMeta = callMetaByAccountId.get(accountId) || {};
         const v = viewsByAccountId.get(accountId) || activeView;
         if (v && v.webContents && !v.webContents.isDestroyed()) {
           const injectPath = path.join(__dirname, 'waInject.js');
@@ -585,13 +655,13 @@ function registerIpc(userDataPath, recorder) {
           }
           recorder.startTabRecording(accountId, {
             recordingsPath: ensureRecordingsPath(settings, userDataPath),
-            accountName: sanitizeName(account.name),
+            ...buildRecordingMeta(account.name, callMeta.peerLabel),
             mp3Quality: settings.mp3Quality,
           });
         } else {
           recorder.startCandidateRecording(accountId, {
             recordingsPath: ensureRecordingsPath(settings, userDataPath),
-            accountName: sanitizeName(account.name),
+            ...buildRecordingMeta(account.name, callMeta.peerLabel),
             micDevice: settings.micDevice,
             speakerDevice: settings.speakerDevice,
             mp3Quality: settings.mp3Quality,
@@ -616,6 +686,7 @@ function registerIpc(userDataPath, recorder) {
       }
     } catch (e) {}
     recorder.stopIfRecording(accountId, { deleteIfUnconfirmed: true });
+    callMetaByAccountId.delete(accountId);
   });
 }
 

@@ -1,0 +1,75 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bgGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(512 328) rotate(90) scale(640 640)">
+      <stop offset="0%" stop-color="#0D1B10"/>
+      <stop offset="65%" stop-color="#050805"/>
+      <stop offset="100%" stop-color="#020302"/>
+    </radialGradient>
+    <linearGradient id="chameleonBody" x1="250" y1="160" x2="760" y2="790" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7DFF72"/>
+      <stop offset="45%" stop-color="#3BE08C"/>
+      <stop offset="100%" stop-color="#21B95F"/>
+    </linearGradient>
+    <linearGradient id="tailGradient" x1="330" y1="380" x2="640" y2="800" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#41F08B"/>
+      <stop offset="60%" stop-color="#1AD06A"/>
+      <stop offset="100%" stop-color="#0DA84E"/>
+    </linearGradient>
+    <linearGradient id="textGradient" x1="170" y1="820" x2="860" y2="820" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#73FF79"/>
+      <stop offset="50%" stop-color="#40E98C"/>
+      <stop offset="100%" stop-color="#1FCF6B"/>
+    </linearGradient>
+    <filter id="glow" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.20 0 0 0 0 1 0 0 0 0 0.42 0 0 0 0.35 0"/>
+    </filter>
+    <filter id="softGlow" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#bgGlow)"/>
+  <g opacity="0.18" stroke="#67FF84" stroke-width="1">
+    <path d="M0 128H1024"/>
+    <path d="M0 256H1024"/>
+    <path d="M0 384H1024"/>
+    <path d="M0 512H1024"/>
+    <path d="M0 640H1024"/>
+    <path d="M0 768H1024"/>
+    <path d="M128 0V1024"/>
+    <path d="M256 0V1024"/>
+    <path d="M384 0V1024"/>
+    <path d="M512 0V1024"/>
+    <path d="M640 0V1024"/>
+    <path d="M768 0V1024"/>
+    <path d="M896 0V1024"/>
+  </g>
+
+  <g filter="url(#glow)" opacity="0.95">
+    <ellipse cx="440" cy="405" rx="180" ry="220" fill="url(#chameleonBody)" opacity="0.26"/>
+    <path d="M338 258C338 191 393 136 461 136C509 136 555 165 573 213L592 263L640 235C673 216 715 227 736 258L769 306C792 340 787 385 758 412L714 450L730 494C742 530 730 571 699 594L641 638L650 705C656 757 623 804 572 817L517 831L481 887C458 912 418 919 388 904L333 878L301 821L256 812C205 800 171 756 171 704V381C171 316 231 268 295 280L338 258Z" fill="url(#chameleonBody)" opacity="0.9"/>
+    <path d="M537 171C563 141 605 135 636 156L668 177C694 195 703 231 690 260C677 289 645 304 615 297L572 287L537 171Z" fill="url(#chameleonBody)" opacity="0.95"/>
+    <path d="M625 305C657 307 683 330 689 362C696 395 680 428 651 445C623 462 587 458 563 436C538 414 530 379 543 349C556 319 588 303 625 305Z" fill="#071009" opacity="0.88"/>
+    <circle cx="619" cy="372" r="55" fill="#071009"/>
+    <circle cx="630" cy="356" r="17" fill="#8CFF9D"/>
+    <path d="M587 445C620 466 662 470 700 456" stroke="#071009" stroke-width="12" stroke-linecap="round"/>
+
+    <path d="M342 530C347 450 383 382 446 343C492 314 549 305 603 318" stroke="url(#tailGradient)" stroke-width="134" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <path d="M342 530C347 450 383 382 446 343C492 314 549 305 603 318" stroke="#000000" stroke-opacity="0.34" stroke-width="154" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+    <path d="M503 503C550 503 588 541 588 588C588 635 550 673 503 673C456 673 418 635 418 588C418 541 456 503 503 503Z" fill="#071009"/>
+    <path d="M503 526C537 526 565 554 565 588C565 622 537 650 503 650C469 650 441 622 441 588C441 554 469 526 503 526Z" fill="#2CF06E" opacity="0.7"/>
+    <path d="M540 588C540 609 524 625 503 625C482 625 466 609 466 588C466 567 482 551 503 551C524 551 540 567 540 588Z" fill="#071009"/>
+    <circle cx="496" cy="580" r="10" fill="#8CFF9D"/>
+  </g>
+
+  <g filter="url(#softGlow)">
+    <text x="512" y="882" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="114" font-weight="600" letter-spacing="2" fill="url(#textGradient)">HAMELEONWEB</text>
+    <text x="512" y="928" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="34" font-weight="500" letter-spacing="14" fill="#66FF8F">━━  WEB  ━━</text>
+  </g>
+</svg>

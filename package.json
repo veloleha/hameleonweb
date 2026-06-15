@@ -17,11 +17,12 @@
   },
   "build": {
     "appId": "com.hameleonweb.app",
-    "productName": "hameleonweb",
+    "productName": "HAMELEONWEB",
     "files": [
       "src/**/*",
       "node_modules/@ffmpeg-installer/**/*",
       "hameleonweb.png",
+      "hameleonweb.svg",
       "hameleonweb.ico",
       "package.json"
     ],

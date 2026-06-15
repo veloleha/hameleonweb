@@ -98,7 +98,9 @@ class Recorder {
     const stamp = formatTimestamp(now);
 
     const accountName = safeFilePart(cfg.accountName);
-    const fileBase = `${stamp}__${safeFilePart(accountId)}__${accountName}__call.mp3`;
+    const callTarget = safeFilePart(cfg.peerNumber || cfg.peerLabel);
+    const callTargetPart = callTarget ? `__to_${callTarget}` : '';
+    const fileBase = `${stamp}__${safeFilePart(accountId)}__${accountName}${callTargetPart}__call.mp3`;
 
     let outDir = path.join(cfg.recordingsPath, dayFolder);
     try {
@@ -655,7 +657,9 @@ class Recorder {
     const stamp = formatTimestamp(now);
 
     const accountName = safeFilePart(cfg.accountName);
-    const fileBase = `${stamp}__${safeFilePart(accountId)}__${accountName}__call.mp3`;
+    const callTarget = safeFilePart(cfg.peerNumber || cfg.peerLabel);
+    const callTargetPart = callTarget ? `__to_${callTarget}` : '';
+    const fileBase = `${stamp}__${safeFilePart(accountId)}__${accountName}${callTargetPart}__call.mp3`;
 
     let outDir = path.join(cfg.recordingsPath, dayFolder);
     let usingFallback = false;
