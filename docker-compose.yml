@@ -70,6 +70,7 @@ services:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
       - ./data/certbot/conf:/etc/letsencrypt:ro
       - ./data/certbot/www:/var/www/certbot:ro
+      - ./downloads:/var/www/downloads:ro
     depends_on:
       - api
       - website
