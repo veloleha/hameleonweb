@@ -92,7 +92,7 @@ def load_tariffs():
             ],
             "primary": True,
             "cta": "Купить через Telegram",
-            "bulk": "250 USDT / мес при покупке от 5 лицензий",
+            "bulk": "250 USDT / первый месяц",
         },
     ]
 
@@ -104,12 +104,11 @@ def get_tariff(tariff_id):
     return None
 
 
-def get_tariff_unit_price(tariff, qty=1):
+def get_tariff_unit_price(tariff, qty=1, is_first_month=False):
     base_price = float(tariff.get("price", 0) or 0)
-    bulk_min_qty = int(tariff.get("bulk_min_qty", 0) or 0)
     bulk_price = tariff.get("bulk_price")
 
-    if bulk_price is not None and bulk_min_qty and qty >= bulk_min_qty:
+    if bulk_price is not None and is_first_month:
         try:
             return float(bulk_price)
         except (TypeError, ValueError):
@@ -371,16 +370,19 @@ async def menu_buy(callback: CallbackQuery, state: FSMContext):
     text = "🛒 <b>Выберите тариф с сайта:</b>\n\n"
 
     for tariff in tariffs:
-        text += f"<b>{tariff['name']}</b> — ${tariff['price']} {tariff.get('currency', 'USDT')}\n"
-        text += f"⏱ {tariff.get('period', '')}\n"
+        first_price = tariff.get('bulk_price') or tariff['price']
+        std_price = tariff['price']
+        text += f"<b>{tariff['name']}</b>\n"
         if tariff.get("badge"):
             text += f"🏷 {tariff['badge']}\n"
         if tariff.get("bulk"):
-            text += f"{tariff['bulk']}\n"
+            text += f"💡 {tariff['bulk']} · затем ${std_price}/мес\n"
+        else:
+            text += f"💰 ${std_price} {tariff.get('currency', 'USDT')} / {tariff.get('period', 'мес')}\n"
         text += f"{tariff.get('desc', '')}\n\n"
         keyboard.append([
             InlineKeyboardButton(
-                text=f"🛒 {tariff['name']} — ${tariff['price']}",
+                text=f"🛒 {tariff['name']} — ${first_price} USDT",
                 callback_data=f"pkg:{tariff['id']}"
             )
         ])
@@ -401,25 +403,24 @@ async def select_package(callback: CallbackQuery, state: FSMContext):
 
     await state.update_data(selected_tariff=tariff, qty=1)
 
-    unit_1 = get_tariff_unit_price(tariff, 1)
-    unit_2 = get_tariff_unit_price(tariff, 2)
-    unit_3 = get_tariff_unit_price(tariff, 3)
-    unit_5 = get_tariff_unit_price(tariff, 5)
-    unit_10 = get_tariff_unit_price(tariff, 10)
-    
+    first_price = get_tariff_unit_price(tariff, 1, is_first_month=True)
+    std_price = get_tariff_unit_price(tariff, 1, is_first_month=False)
+    has_first_month_promo = tariff.get('bulk_price') and float(tariff.get('bulk_price', 0)) < std_price
+
+    pricing_text = (
+        f"💡 Первый месяц: <b>${first_price:g} USDT</b>\n"
+        f"💰 Далее: <b>${std_price:g} USDT / мес</b>"
+    ) if has_first_month_promo else f"💰 <b>${std_price:g} USDT / {tariff.get('period', 'мес')}</b>"
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [{"text": f"1 (${unit_1 * 1:g})", "callback_data": "qty:1"}, {"text": f"2 (${unit_2 * 2:g})", "callback_data": "qty:2"}, {"text": f"3 (${unit_3 * 3:g})", "callback_data": "qty:3"}],
-        [{"text": f"5 (${unit_5 * 5:g})", "callback_data": "qty:5"}, {"text": f"10 (${unit_10 * 10:g})", "callback_data": "qty:10"}],
+        [{"text": f"✅ Оплатить ${first_price:g} USDT (1 мес)", "callback_data": "qty:1"}],
         [{"text": "◀️ Назад", "callback_data": "menu:buy"}]
     ])
-    
+
     await callback.message.edit_text(
-        f"<b>Выберите количество:</b>\n\n"
-        f"Тариф: <b>{tariff['name']}</b>\n"
-        f"Цена за 1: ${tariff['price']} {tariff.get('currency', 'USDT')}\n"
-        f"{tariff.get('desc', '')}\n"
-        f"{tariff.get('bulk', '')}\n\n"
-        f"Можно просто отправить цифру в чат, например: 1, 5 или 10.",
+        f"<b>{tariff['name']}</b>\n\n"
+        f"{pricing_text}\n\n"
+        f"{tariff.get('desc', '')}",
         reply_markup=keyboard,
         parse_mode="HTML"
     )
@@ -432,7 +433,8 @@ async def select_qty(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     tariff = data.get("selected_tariff") or {}
     await state.update_data(qty=qty)
-    total = get_tariff_total_price(tariff, qty)
+    is_first = qty == 1 and tariff.get('bulk_price')
+    total = get_tariff_unit_price(tariff, qty, is_first_month=bool(is_first)) * qty
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [{"text": "💳 Оплатить (NOWPayments)", "callback_data": "pay:nowpayments"}],
