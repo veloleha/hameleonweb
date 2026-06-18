@@ -34,9 +34,23 @@
     ],
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "portable", "arch": ["x64"] }
-      ]
+        { "target": "nsis", "arch": ["x64"] }
+      ],
+      "icon": "hameleonweb.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "hameleonweb.ico",
+      "uninstallerIcon": "hameleonweb.ico",
+      "installerHeaderIcon": "hameleonweb.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "HAMELEONWEB",
+      "artifactName": "HAMELEONWEB-Setup-${version}.exe",
+      "include": "installer.nsh"
     }
   }
 }

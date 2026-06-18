@@ -5,6 +5,7 @@ const { app, BrowserWindow, BrowserView, ipcMain, dialog, shell, session } = req
 
 const { loadAccounts, createAccount, renameAccount, deleteAccount } = require('./accounts');
 const { loadSettings, saveSettings } = require('./settings');
+const { loadAuthState, saveAuthState, clearAuthState } = require('./auth');
 const { Recorder } = require('./recorder');
 
 const SIDEBAR_WIDTH = 280;
@@ -323,9 +324,311 @@ function buildRecordingMeta(accountName, peerLabel) {
   return meta;
 }
 
-function registerIpc(userDataPath, recorder) {
+function normalizeApiBaseUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return 'http://localhost:8000';
+  return raw.replace(/\/+$/, '').replace(':8003', ':8000');
+}
+
+function getApiBaseUrl(userDataPath) {
+  const settings = loadSettings(userDataPath);
+  return normalizeApiBaseUrl(settings.apiBaseUrl || process.env.HAMELEONWEB_API_URL || 'http://localhost:8000');
+}
+
+function buildDeviceInfo(userDataPath) {
+  const host = os.hostname() || 'desktop';
+  const userName = process.env.USERNAME || process.env.USER || 'user';
+  const deviceId = `hameleonweb-${host}`;
+  const deviceName = `${host} (${userName})`;
+  return { deviceId, deviceName };
+}
+
+function isLicenseActive(license) {
+  if (!license) return false;
+  const status = String(license.status || '').toLowerCase();
+  if (status !== 'active' && status !== 'trial') return false;
+  if (!license.expires_at) return true;
+  const expiresAt = new Date(license.expires_at);
+  return Number.isFinite(expiresAt.getTime()) ? expiresAt > new Date() : true;
+}
+
+function pickActiveLicense(licenses) {
+  const list = Array.isArray(licenses) ? licenses : [];
+  const active = list.find((license) => isLicenseActive(license));
+  return active || null;
+}
+
+async function apiJson(userDataPath, apiPath, options = {}) {
+  const baseUrl = getApiBaseUrl(userDataPath).replace('localhost', '127.0.0.1');
+  const url = new URL(apiPath, `${baseUrl.replace(/\/$/, '')}/`);
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(options.headers || {}),
+  };
+
+  console.log('[apiJson] Fetching:', url.toString());
+
+  let response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers,
+    });
+  } catch (fetchErr) {
+    console.error('[apiJson] Fetch error:', fetchErr.message);
+    throw new Error(`Network error: ${fetchErr.message}`);
+  }
+
+  const rawText = await response.text();
+  let body = null;
+  if (rawText) {
+    try {
+      body = JSON.parse(rawText);
+    } catch (e) {
+      body = rawText;
+    }
+  }
+
+  if (!response.ok) {
+    const message = (body && body.detail) || (body && body.message) || response.statusText || 'Request failed';
+    const err = new Error(message);
+    err.status = response.status;
+    err.body = body;
+    throw err;
+  }
+
+  return body;
+}
+
+async function refreshLicensesFromApi(authPath, settingsPath) {
+  const spPath = settingsPath || authPath;
+  const auth = loadAuthState(authPath);
+  if (!auth.accessToken) {
+    throw new Error('Not authenticated');
+  }
+
+  const headers = { Authorization: `Bearer ${auth.accessToken}` };
+  let licenses;
+
+  try {
+    licenses = await apiJson(spPath, '/api/license/my', { method: 'GET', headers });
+  } catch (error) {
+    if (error && error.status === 401 && auth.refreshToken) {
+      const refreshed = await apiJson(spPath, '/api/auth/refresh', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${auth.refreshToken}` },
+      });
+
+      const nextAuth = saveAuthState(authPath, {
+        ...auth,
+        accessToken: refreshed.access_token,
+        refreshToken: refreshed.refresh_token,
+        tokenExpiresIn: refreshed.expires_in,
+        tokenAcquiredAt: new Date().toISOString(),
+      });
+
+      licenses = await apiJson(spPath, '/api/license/my', {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${nextAuth.accessToken}` },
+      });
+    } else {
+      throw error;
+    }
+  }
+
+  const activeLicense = pickActiveLicense(licenses);
+  const nextAuth = saveAuthState(authPath, {
+    ...loadAuthState(authPath),
+    licenses,
+    activeLicenseKey: activeLicense ? activeLicense.license_key : '',
+    lastCheckedAt: new Date().toISOString(),
+    lastError: '',
+  });
+  return nextAuth;
+}
+
+async function startTrialFromApi(authPath, settingsPath) {
+  const spPath = settingsPath || authPath;
+  const auth = loadAuthState(authPath);
+  if (!auth.accessToken) {
+    throw new Error('Not authenticated');
+  }
+
+  const trial = await apiJson(spPath, '/api/trial/start', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${auth.accessToken}`,
+    },
+  });
+
+  const nextAuth = saveAuthState(authPath, {
+    ...loadAuthState(authPath),
+    lastError: '',
+    lastCheckedAt: new Date().toISOString(),
+  });
+
+  return {
+    ...trial,
+    auth: nextAuth,
+  };
+}
+
+async function ensureActiveLicenseOrTrial(authPath, settingsPath) {
+  const spPath = settingsPath || authPath;
+  let auth = await refreshLicensesFromApi(authPath, spPath);
+  if (pickActiveLicense(auth.licenses)) {
+    return auth;
+  }
+
+  try {
+    await startTrialFromApi(authPath, spPath);
+  } catch (error) {
+    const message = String((error && error.message) || '');
+    if (!/already have an active license/i.test(message) && !/trial already used/i.test(message)) {
+      const nextAuth = saveAuthState(authPath, {
+        ...loadAuthState(authPath),
+        lastError: message || 'Failed to start trial',
+        lastCheckedAt: new Date().toISOString(),
+      });
+      const err = new Error(message || 'Failed to start trial');
+      err.auth = nextAuth;
+      throw err;
+    }
+  }
+
+  auth = await refreshLicensesFromApi(authPath, spPath);
+  if (!pickActiveLicense(auth.licenses)) {
+    const nextAuth = saveAuthState(authPath, {
+      ...auth,
+      lastError: 'No active license and trial could not be activated',
+      lastCheckedAt: new Date().toISOString(),
+    });
+    const err = new Error('No active license and trial could not be activated');
+    err.auth = nextAuth;
+    throw err;
+  }
+
+  return auth;
+}
+
+async function requestLoginCode(authPath, payload, settingsPath) {
+  const spPath = settingsPath || authPath;
+  const device = buildDeviceInfo(spPath);
+  const auth = loadAuthState(authPath);
+  const telegramLogin = String(payload.telegramLogin || auth.telegramLogin || '').trim();
+  if (!telegramLogin) {
+    throw new Error('Telegram login is required');
+  }
+
+  return apiJson(spPath, '/api/auth/request-code', {
+    method: 'POST',
+    body: JSON.stringify({
+      telegram_login: telegramLogin,
+      device_id: device.deviceId,
+      device_name: device.deviceName,
+    }),
+  });
+}
+
+async function verifyLoginCode(authPath, payload, settingsPath) {
+  const spPath = settingsPath || authPath;
+  console.log('[verifyLoginCode] payload:', payload);
+  const device = buildDeviceInfo(spPath);
+  const auth = loadAuthState(authPath);
+  const telegramLogin = String((payload && payload.telegramLogin) || auth.telegramLogin || '').trim();
+  const code = String((payload && payload.code) || '').trim();
+
+  console.log('[verifyLoginCode] telegramLogin:', telegramLogin, 'code:', code ? '***' : '(empty)');
+
+  if (!telegramLogin) {
+    throw new Error('Telegram login is required');
+  }
+  if (!code) {
+    throw new Error('Code is required');
+  }
+
+  const tokens = await apiJson(spPath, '/api/auth/verify-code', {
+    method: 'POST',
+    body: JSON.stringify({
+      telegram_login: telegramLogin,
+      code,
+      device_id: device.deviceId,
+      device_name: device.deviceName,
+    }),
+  });
+
+  saveAuthState(authPath, {
+    ...auth,
+    telegramLogin,
+    deviceId: device.deviceId,
+    deviceName: device.deviceName,
+    accessToken: tokens.access_token,
+    refreshToken: tokens.refresh_token,
+    tokenExpiresIn: tokens.expires_in,
+    tokenAcquiredAt: new Date().toISOString(),
+    lastError: '',
+  });
+
+  return ensureActiveLicenseOrTrial(authPath, spPath);
+}
+
+function compareVersions(a, b) {
+  const pa = String(a).split('.').map(Number);
+  const pb = String(b).split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function registerIpc(userDataPath, recorder, sharedDataPath) {
+  // authPath: shared across all Windows users (ProgramData\HAMELEONWEB)
+  // settingsPath / accountsPath: per-user (AppData\Roaming\whatsapp-manager)
+  const authPath = sharedDataPath || userDataPath;
+
   ipcMain.handle('accounts:list', () => {
     return loadAccounts(userDataPath);
+  });
+
+  ipcMain.handle('auth:get', () => {
+    const auth = loadAuthState(authPath);
+    const settings = loadSettings(userDataPath);
+    return {
+      ...auth,
+      apiBaseUrl: settings.apiBaseUrl || process.env.HAMELEONWEB_API_URL || 'http://localhost:8000',
+    };
+  });
+
+  ipcMain.handle('auth:setApiBaseUrl', (_e, apiBaseUrl) => {
+    const current = loadSettings(userDataPath);
+    const next = { ...current, apiBaseUrl: normalizeApiBaseUrl(apiBaseUrl) };
+    const saved = saveSettings(userDataPath, next);
+    return { ok: true, apiBaseUrl: saved.apiBaseUrl };
+  });
+
+  ipcMain.handle('auth:requestCode', async (_e, payload) => {
+    const auth = loadAuthState(authPath);
+    const telegramLogin = String((payload && payload.telegramLogin) || auth.telegramLogin || '').trim();
+    const result = await requestLoginCode(authPath, { telegramLogin }, userDataPath);
+    saveAuthState(authPath, {
+      ...auth,
+      telegramLogin,
+      lastError: '',
+    });
+    return result;
+  });
+
+  ipcMain.handle('auth:verifyCode', async (_e, payload) => {
+    return verifyLoginCode(authPath, payload || {}, userDataPath);
+  });
+
+  ipcMain.handle('auth:refreshLicenses', async () => {
+    return ensureActiveLicenseOrTrial(authPath, userDataPath);
+  });
+
+  ipcMain.handle('auth:clear', () => {
+    return clearAuthState(authPath);
   });
 
   ipcMain.handle('accounts:add', () => {
@@ -590,6 +893,54 @@ function registerIpc(userDataPath, recorder) {
     return { ok: true };
   });
 
+  const UPDATE_BASE_URL = 'https://hameleonweb.xyz/download';
+  let _pendingInstallerPath = null;
+
+  ipcMain.handle('app:checkUpdate', async () => {
+    try {
+      const currentVersion = app.getVersion();
+      const res = await fetch(`${UPDATE_BASE_URL}/latest.json?t=${Date.now()}`);
+      if (!res.ok) return { error: `Server returned ${res.status}` };
+      const info = await res.json();
+      const latestVersion = info.version;
+      if (!latestVersion) return { error: 'No version in latest.json' };
+
+      const newer = compareVersions(latestVersion, currentVersion) > 0;
+      return {
+        currentVersion,
+        latestVersion,
+        newer,
+        url: info.url || `${UPDATE_BASE_URL}/${info.file || `HAMELEONWEB-Setup-${latestVersion}.exe`}`,
+        notes: info.notes || '',
+      };
+    } catch (e) {
+      return { error: String(e.message || e) };
+    }
+  });
+
+  ipcMain.handle('app:installUpdate', async (_e, { url }) => {
+    try {
+      const tmpDir = os.tmpdir();
+      const fileName = url.split('/').pop() || 'HAMELEONWEB-Update.exe';
+      const destPath = path.join(tmpDir, fileName);
+
+      const res = await fetch(url);
+      if (!res.ok) return { error: `Download failed: ${res.status}` };
+
+      const buffer = Buffer.from(await res.arrayBuffer());
+      fs.writeFileSync(destPath, buffer);
+      _pendingInstallerPath = destPath;
+
+      const { spawn } = require('child_process');
+      spawn(destPath, ['/S'], { detached: true, stdio: 'ignore' }).unref();
+
+      setTimeout(() => app.quit(), 1500);
+      return { ok: true };
+    } catch (e) {
+      return { error: String(e.message || e) };
+    }
+  });
+
   const _mainLog = (msg) => { try { fs.appendFileSync(path.join(os.tmpdir(), 'hameleonweb-main.log'), new Date().toISOString() + ' ' + msg + '\n'); } catch(e){} };
   _mainLog('IPC handlers registered');
 
@@ -693,10 +1044,27 @@ function registerIpc(userDataPath, recorder) {
 app.whenReady().then(() => {
   const userDataPath = app.getPath('userData');
 
+  // Shared auth path — ProgramData\HAMELEONWEB (created by installer with full access for all users)
+  // Admin logs in once, all users share the same license/token
+  const _sharedBase = process.platform === 'win32'
+    ? path.join(process.env.PROGRAMDATA || 'C:\\ProgramData', 'HAMELEONWEB')
+    : path.join('/var/lib', 'hameleonweb');
+  let sharedDataPath = userDataPath; // fallback: per-user if shared not accessible
+  try {
+    fs.mkdirSync(_sharedBase, { recursive: true });
+    // Test write access
+    const _testFile = path.join(_sharedBase, '.write-test');
+    fs.writeFileSync(_testFile, '1');
+    fs.unlinkSync(_testFile);
+    sharedDataPath = _sharedBase;
+  } catch (e) {
+    console.log('[auth] ProgramData not writable, using per-user path:', e.message);
+  }
+
   const recorder = new Recorder({ userDataPath });
 
   createMainWindow();
-  registerIpc(userDataPath, recorder);
+  registerIpc(userDataPath, recorder, sharedDataPath);
 
   if (loadAccounts(userDataPath).length === 0) {
     createAccount(userDataPath);

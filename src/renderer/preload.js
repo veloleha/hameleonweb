@@ -1,6 +1,13 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
+  authGet: () => ipcRenderer.invoke('auth:get'),
+  authSetApiBaseUrl: (apiBaseUrl) => ipcRenderer.invoke('auth:setApiBaseUrl', apiBaseUrl),
+  authRequestCode: (payload) => ipcRenderer.invoke('auth:requestCode', payload),
+  authVerifyCode: (payload) => ipcRenderer.invoke('auth:verifyCode', payload),
+  authRefreshLicenses: () => ipcRenderer.invoke('auth:refreshLicenses'),
+  authClear: () => ipcRenderer.invoke('auth:clear'),
+
   accountsList: () => ipcRenderer.invoke('accounts:list'),
   accountsAdd: () => ipcRenderer.invoke('accounts:add'),
   accountsRename: (id, name) => ipcRenderer.invoke('accounts:rename', { id, name }),
@@ -21,4 +28,7 @@ contextBridge.exposeInMainWorld('api', {
   testRecording: (cfg) => ipcRenderer.invoke('recording:test', cfg),
   resetCache: (id) => ipcRenderer.invoke('cache:resetAccount', { id }),
   openRecordingsFolder: () => ipcRenderer.invoke('recordings:openFolder'),
+
+  checkUpdate: () => ipcRenderer.invoke('app:checkUpdate'),
+  installUpdate: () => ipcRenderer.invoke('app:installUpdate'),
 });
