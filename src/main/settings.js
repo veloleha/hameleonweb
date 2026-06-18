@@ -9,7 +9,7 @@ const DEFAULT_SETTINGS = {
   mp3Quality: 4,
   graceMs: 8000,
   minDurationSec: 10,
-  apiBaseUrl: 'http://localhost:8000',
+  apiBaseUrl: 'https://hameleonweb.xyz',
 };
 
 function settingsFilePath(userDataPath) {

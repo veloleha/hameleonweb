@@ -324,15 +324,16 @@ function buildRecordingMeta(accountName, peerLabel) {
   return meta;
 }
 
+const PRODUCTION_API_URL = 'https://hameleonweb.xyz';
+
 function normalizeApiBaseUrl(value) {
   const raw = String(value || '').trim();
-  if (!raw) return 'http://localhost:8000';
+  if (!raw) return PRODUCTION_API_URL;
   return raw.replace(/\/+$/, '').replace(':8003', ':8000');
 }
 
-function getApiBaseUrl(userDataPath) {
-  const settings = loadSettings(userDataPath);
-  return normalizeApiBaseUrl(settings.apiBaseUrl || process.env.HAMELEONWEB_API_URL || 'http://localhost:8000');
+function getApiBaseUrl(_userDataPath) {
+  return PRODUCTION_API_URL;
 }
 
 function buildDeviceInfo(userDataPath) {
@@ -596,15 +597,12 @@ function registerIpc(userDataPath, recorder, sharedDataPath) {
     const settings = loadSettings(userDataPath);
     return {
       ...auth,
-      apiBaseUrl: settings.apiBaseUrl || process.env.HAMELEONWEB_API_URL || 'http://localhost:8000',
+      apiBaseUrl: PRODUCTION_API_URL,
     };
   });
 
-  ipcMain.handle('auth:setApiBaseUrl', (_e, apiBaseUrl) => {
-    const current = loadSettings(userDataPath);
-    const next = { ...current, apiBaseUrl: normalizeApiBaseUrl(apiBaseUrl) };
-    const saved = saveSettings(userDataPath, next);
-    return { ok: true, apiBaseUrl: saved.apiBaseUrl };
+  ipcMain.handle('auth:setApiBaseUrl', (_e, _apiBaseUrl) => {
+    return { ok: true, apiBaseUrl: PRODUCTION_API_URL };
   });
 
   ipcMain.handle('auth:requestCode', async (_e, payload) => {

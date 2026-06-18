@@ -216,7 +216,6 @@ function isAccountClickable() {
 function renderAuthState() {
   const authStatus = el('authStatus');
   const licenseList = el('licenseList');
-  const apiBaseUrlInput = el('apiBaseUrl');
   const loginInput = el('telegramLogin');
   const codeInput = el('telegramCode');
 
@@ -226,9 +225,6 @@ function renderAuthState() {
     return;
   }
 
-  if (apiBaseUrlInput) {
-    apiBaseUrlInput.value = state.auth.apiBaseUrl || 'http://localhost:8000';
-  }
   if (loginInput && !loginInput.value) {
     loginInput.value = state.auth.telegramLogin || '';
   }
@@ -291,7 +287,6 @@ function buildLoginGate() {
       </div>
 
       <div style="display:grid;gap:12px;">
-        <input id="loginGateApiBaseUrl" class="input" type="text" placeholder="http://localhost:8000" />
         <input id="loginGateTelegramLogin" class="input" type="text" placeholder="@username or 123456789" />
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
           <button id="loginGateRequestCode" class="btn secondary">Request code</button>
@@ -314,10 +309,8 @@ function showLoginGate() {
   const gate = buildLoginGate();
   gate.style.display = 'flex';
   const auth = state.auth || {};
-  const apiBaseUrlInput = gate.querySelector('#loginGateApiBaseUrl');
   const loginInput = gate.querySelector('#loginGateTelegramLogin');
   const codeInput = gate.querySelector('#loginGateCode');
-  if (apiBaseUrlInput) apiBaseUrlInput.value = auth.apiBaseUrl || 'http://localhost:8003';
   if (loginInput) loginInput.value = auth.telegramLogin || '';
   if (codeInput) codeInput.value = '';
   renderLoginGateAuth();
@@ -378,16 +371,7 @@ async function loadAuthState() {
 }
 
 async function saveApiBaseUrlFromInput() {
-  const input = el('apiBaseUrl');
-  if (!input) return;
-  const apiBaseUrl = String(input.value || '').trim();
-  if (!apiBaseUrl) return;
-  const res = await window.api.authSetApiBaseUrl(apiBaseUrl);
-  if (state.auth) {
-    state.auth.apiBaseUrl = res.apiBaseUrl;
-    renderAuthState();
-    renderLoginGateAuth();
-  }
+  // API URL is hardcoded to production — no-op
 }
 
 async function requestLoginCodeFromUI() {
@@ -473,32 +457,11 @@ async function ensureAuthVisibleIfNeeded() {
 
 async function bindLoginGate() {
   const gate = buildLoginGate();
-  const apiBaseUrlInput = gate.querySelector('#loginGateApiBaseUrl');
   const requestBtn = gate.querySelector('#loginGateRequestCode');
   const checkBtn = gate.querySelector('#loginGateCheckLicenses');
   const verifyBtn = gate.querySelector('#loginGateVerify');
   const clearBtn = gate.querySelector('#loginGateClearAuth');
   const statusEl = gate.querySelector('#loginGateStatus');
-
-  const applyApiBaseUrl = async () => {
-    const apiBaseUrl = String(apiBaseUrlInput.value || '').trim();
-    if (!apiBaseUrl) return;
-    const res = await window.api.authSetApiBaseUrl(apiBaseUrl);
-    if (state.auth) {
-      state.auth.apiBaseUrl = res.apiBaseUrl;
-    }
-    renderLoginGateAuth();
-  };
-
-  if (apiBaseUrlInput) {
-    apiBaseUrlInput.addEventListener('blur', async () => {
-      try {
-        await applyApiBaseUrl();
-      } catch (e) {
-        if (statusEl) statusEl.textContent = `API URL error: ${e && e.message ? e.message : String(e)}`;
-      }
-    });
-  }
 
   const btnSignOutMain = el('btnSignOutMain');
   if (btnSignOutMain) {
@@ -515,7 +478,6 @@ async function bindLoginGate() {
   if (requestBtn) {
     requestBtn.addEventListener('click', async () => {
       try {
-        await applyApiBaseUrl();
         const telegramLogin = String(gate.querySelector('#loginGateTelegramLogin').value || '').trim();
         const res = await window.api.authRequestCode({ telegramLogin });
         state.auth = await window.api.authGet();
@@ -530,7 +492,6 @@ async function bindLoginGate() {
   if (verifyBtn) {
     verifyBtn.addEventListener('click', async () => {
       try {
-        await applyApiBaseUrl();
         const telegramLogin = String(gate.querySelector('#loginGateTelegramLogin').value || '').trim();
         const code = String(gate.querySelector('#loginGateCode').value || '').trim();
         const res = await window.api.authVerifyCode({ telegramLogin, code });
@@ -956,7 +917,6 @@ async function openSettings() {
   const s = await window.api.settingsGet();
   state.settings = s;
 
-  el('apiBaseUrl').value = state.auth && state.auth.apiBaseUrl ? state.auth.apiBaseUrl : (s.apiBaseUrl || 'http://localhost:8003');
   el('alwaysRecord').checked = !!s.alwaysRecord;
   el('recordingsPath').value = s.recordingsPath || '';
   el('mp3Quality').value = s.mp3Quality ?? 4;
@@ -988,15 +948,6 @@ async function openSettings() {
 }
 
 async function bindSettings() {
-  const apiBaseUrlInput = el('apiBaseUrl');
-  if (apiBaseUrlInput) {
-    apiBaseUrlInput.addEventListener('blur', async () => {
-      try {
-        await saveApiBaseUrlFromInput();
-      } catch (e) {}
-    });
-  }
-
   el('alwaysRecord').addEventListener('change', async () => {
     await window.api.settingsSet({ alwaysRecord: el('alwaysRecord').checked });
   });
