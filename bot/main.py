@@ -155,7 +155,10 @@ def create_nowpayments_payment(amount_usd: float, user_id: int) -> dict:
         return {'error': True, 'exception': str(e)}
 
 
-# { payment_id -> {client_id, tg_id, chat_id, amount_usd, type: 'license'|'topup', tariff, qty} }
+# { payment_id -> {client_id, tg_id, chat_id, amount_usd, type: 'license'|'topup', tariff, qty, created_at} }
+# Polling every 5 min, payment lives 7 days
+PAYMENT_POLL_INTERVAL = 300   # 5 minutes
+PAYMENT_TTL_DAYS = 7
 pending_payments: dict = {}
 
 
@@ -233,16 +236,37 @@ async def activate_after_payment(payment_id: str, info: dict):
 
 
 async def poll_payments():
-    """Background task: check pending NOWPayments every 60 seconds"""
+    """Background task: check pending NOWPayments every 5 minutes, expire after 7 days"""
     FINISHED = {'finished', 'confirmed', 'partially_paid'}
     FAILED = {'failed', 'expired', 'refunded'}
+    TTL_SECONDS = PAYMENT_TTL_DAYS * 24 * 3600
     while True:
-        await asyncio.sleep(60)
+        await asyncio.sleep(PAYMENT_POLL_INTERVAL)
         if not pending_payments:
             continue
         to_remove = []
+        now = datetime.utcnow().timestamp()
         for pid, info in list(pending_payments.items()):
             try:
+                # Check if payment exceeded 7-day TTL
+                created_at = info.get('created_at', now)
+                if now - created_at > TTL_SECONDS:
+                    to_remove.append(pid)
+                    try:
+                        await bot.send_message(
+                            chat_id=info['chat_id'],
+                            text=(
+                                f"⏰ <b>Время ожидания платежа истекло.</b>\n"
+                                f"Платёж <code>{pid}</code> не был подтверждён в течение {PAYMENT_TTL_DAYS} дней.\n"
+                                f"Если вы всё же оплатили — напишите в поддержку."
+                            ),
+                            parse_mode="HTML"
+                        )
+                    except Exception:
+                        pass
+                    logger.info(f"poll_payments: payment {pid} expired after {PAYMENT_TTL_DAYS} days")
+                    continue
+
                 data = await asyncio.to_thread(check_nowpayments_status, pid)
                 status = str(data.get('payment_status', '')).lower()
                 if status in FINISHED:
@@ -258,7 +282,10 @@ async def poll_payments():
                         )
                     except Exception:
                         pass
-                # else: still waiting
+                else:
+                    # Still waiting — log remaining time
+                    elapsed_h = int((now - created_at) / 3600)
+                    logger.debug(f"poll_payments: {pid} status={status!r} elapsed={elapsed_h}h")
             except Exception as e:
                 logger.warning(f"poll_payments error pid={pid}: {e}")
         for pid in to_remove:
@@ -501,6 +528,7 @@ async def pay_nowpayments(callback: CallbackQuery, state: FSMContext):
             'type': 'license',
             'tariff': tariff,
             'qty': qty,
+            'created_at': datetime.utcnow().timestamp(),
         }
 
     await state.clear()
@@ -657,6 +685,7 @@ async def topup_enter_amount(message: Message, state: FSMContext):
             'chat_id': message.chat.id,
             'amount_usd': amount,
             'type': 'topup',
+            'created_at': datetime.utcnow().timestamp(),
         }
 
     await state.clear()
