@@ -156,8 +156,8 @@ def create_nowpayments_payment(amount_usd: float, user_id: int) -> dict:
 
 
 # { payment_id -> {client_id, tg_id, chat_id, amount_usd, type: 'license'|'topup', tariff, qty, created_at} }
-# Polling every 5 min, payment lives 7 days
-PAYMENT_POLL_INTERVAL = 300   # 5 minutes
+# Polling every 60 sec, payment lives 7 days
+PAYMENT_POLL_INTERVAL = 60    # 1 minute
 PAYMENT_TTL_DAYS = 7
 pending_payments: dict = {}
 
