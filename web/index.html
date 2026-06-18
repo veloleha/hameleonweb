@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HAMELEONWEB — Запись звонков WhatsApp</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
+            color: #c9d1d9;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+        
+        header {
+            text-align: center;
+            padding: 80px 20px 60px;
+        }
+        
+        .logo {
+            width: 120px;
+            height: 120px;
+            margin-bottom: 30px;
+        }
+        
+        h1 {
+            font-size: 3rem;
+            background: linear-gradient(45deg, #00ff88, #00cc6a);
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 20px;
+        }
+        
+        .subtitle {
+            font-size: 1.3rem;
+            color: #8b949e;
+            max-width: 600px;
+            margin: 0 auto 40px;
+        }
+        
+        .cta-section {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-bottom: 80px;
+        }
+        
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 16px 32px;
+            border-radius: 12px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.3s ease;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(45deg, #00ff88, #00cc6a);
+            color: #0d1117;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(0, 255, 136, 0.3);
+        }
+        
+        .btn-secondary {
+            background: #21262d;
+            color: #c9d1d9;
+            border: 1px solid #30363d;
+        }
+        
+        .btn-secondary:hover {
+            background: #30363d;
+        }
+        
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 30px;
+            margin-bottom: 80px;
+        }
+        
+        .feature-card {
+            background: #161b22;
+            border: 1px solid #21262d;
+            border-radius: 16px;
+            padding: 30px;
+            transition: all 0.3s ease;
+        }
+        
+        .feature-card:hover {
+            border-color: #00ff88;
+            transform: translateY(-5px);
+        }
+        
+        .feature-icon {
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+        }
+        
+        .feature-card h3 {
+            font-size: 1.3rem;
+            margin-bottom: 10px;
+            color: #f0f6fc;
+        }
+        
+        .feature-card p {
+            color: #8b949e;
+        }
+        
+        .pricing {
+            text-align: center;
+            padding: 60px 20px;
+            background: #161b22;
+            border-radius: 24px;
+            margin-bottom: 80px;
+        }
+        
+        .pricing h2 {
+            font-size: 2rem;
+            margin-bottom: 40px;
+        }
+        
+        .pricing-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 30px;
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        
+        .pricing-card {
+            background: #0d1117;
+            border: 2px solid #21262d;
+            border-radius: 16px;
+            padding: 30px;
+        }
+        
+        .pricing-card.popular {
+            border-color: #00ff88;
+            position: relative;
+        }
+        
+        .pricing-card.popular::before {
+            content: "ПОПУЛЯРНЫЙ";
+            position: absolute;
+            top: -12px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #00ff88;
+            color: #0d1117;
+            padding: 4px 16px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 700;
+        }
+        
+        .pricing-card h3 {
+            font-size: 1.5rem;
+            margin-bottom: 10px;
+        }
+        
+        .price {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: #00ff88;
+            margin-bottom: 20px;
+        }
+        
+        .price span {
+            font-size: 1rem;
+            color: #8b949e;
+        }
+        
+        .pricing-card ul {
+            list-style: none;
+            margin-bottom: 30px;
+        }
+        
+        .pricing-card li {
+            padding: 8px 0;
+            color: #8b949e;
+        }
+        
+        .pricing-card li::before {
+            content: "✓ ";
+            color: #00ff88;
+        }
+        
+        footer {
+            text-align: center;
+            padding: 40px 20px;
+            color: #8b949e;
+            border-top: 1px solid #21262d;
+        }
+        
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 2rem;
+            }
+            
+            .cta-section {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .btn {
+                width: 100%;
+                max-width: 300px;
+                justify-content: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <svg class="logo" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+            <rect width="100" height="100" rx="20" fill="#0d1117"/>
+            <path d="M30 35 Q50 20 70 35 Q80 50 70 65 Q50 80 30 65 Q20 50 30 35" fill="#00ff88" opacity="0.8"/>
+            <circle cx="50" cy="50" r="15" fill="#0d1117"/>
+            <circle cx="50" cy="50" r="8" fill="#00ff88"/>
+        </svg>
+        
+        <h1>HAMELEONWEB</h1>
+        <p class="subtitle">
+            Автоматическая запись звонков WhatsApp.<br>
+            Сохраняйте важные разговоры в MP3 с распознаванием номера собеседника.
+        </p>
+        
+        <div class="cta-section">
+            <a href="/download/HAMELEONWEB_Setup.exe" class="btn btn-primary">
+                📥 Скачать для Windows
+            </a>
+            <a href="https://t.me/HameleonWebBot" class="btn btn-secondary" target="_blank">
+                🤖 Открыть Telegram бот
+            </a>
+        </div>
+    </header>
+    
+    <main class="container">
+        <section class="features">
+            <div class="feature-card">
+                <div class="feature-icon">🎙️</div>
+                <h3>Автозапись</h3>
+                <p>Начинает записывать звонок автоматически. Не нужно нажимать кнопки — просто звоните.</p>
+            </div>
+            
+            <div class="feature-card">
+                <div class="feature-icon">📁</div>
+                <h3>MP3 сохранение</h3>
+                <p>Все записи сохраняются в высоком качестве MP3 с метаданными звонка.</p>
+            </div>
+            
+            <div class="feature-card">
+                <div class="feature-icon">🔢</div>
+                <h3>Извлечение номера</h3>
+                <p>Автоматически определяет и записывает номер телефона собеседника в имя файла.</p>
+            </div>
+            
+            <div class="feature-card">
+                <div class="feature-icon">👥</div>
+                <h3>Мультиаккаунт</h3>
+                <p>Работайте с несколькими WhatsApp аккаунтами одновременно.</p>
+            </div>
+        </section>
+        
+        <section class="pricing">
+            <h2>Тарифы</h2>
+            <div class="pricing-grid">
+                <div class="pricing-card">
+                    <h3>Месячный</h3>
+                    <div class="price">$29 <span>/ мес</span></div>
+                    <ul>
+                        <li>1 WA аккаунт</li>
+                        <li>1 устройство</li>
+                        <li>Автозапись</li>
+                        <li>MP3 экспорт</li>
+                    </ul>
+                    <a href="https://t.me/HameleonWebBot" class="btn btn-secondary" target="_blank">Выбрать</a>
+                </div>
+                
+                <div class="pricing-card popular">
+                    <h3>Годовой</h3>
+                    <div class="price">$199 <span>/ год</span></div>
+                    <ul>
+                        <li>1 WA аккаунт</li>
+                        <li>1 устройство</li>
+                        <li>Автозапись</li>
+                        <li>MP3 экспорт</li>
+                        <li>Приоритетная поддержка</li>
+                    </ul>
+                    <a href="https://t.me/HameleonWebBot" class="btn btn-primary" target="_blank">Выбрать</a>
+                </div>
+                
+                <div class="pricing-card">
+                    <h3>Безлимитный</h3>
+                    <div class="price">$499 <span>/ год</span></div>
+                    <ul>
+                        <li>999 WA аккаунтов</li>
+                        <li>5 устройств</li>
+                        <li>Облачное хранение</li>
+                        <li>API доступ</li>
+                        <li>Приоритетная поддержка</li>
+                    </ul>
+                    <a href="https://t.me/HameleonWebBot" class="btn btn-secondary" target="_blank">Выбрать</a>
+                </div>
+            </div>
+        </section>
+    </main>
+    
+    <footer>
+        <p>© 2026 HAMELEONWEB. Все права защищены.</p>
+        <p>Поддержка: <a href="https://t.me/admin" style="color: #00ff88;">@admin</a></p>
+    </footer>
+</body>
+</html>
