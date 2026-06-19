@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>HAMELEONWEB — Admin</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#060a07;--bg2:#0a0f0b;--bg3:#0d130e;--border:rgba(62,251,106,0.12);--primary:#3efb6a;--text:#dceedd;--muted:#7a9a82;--red:#ff4d4d;--yellow:#f5c542}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh}
+#login-screen{display:flex;align-items:center;justify-content:center;min-height:100vh}
+.login-box{background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:40px 36px;width:340px}
+.login-box h1{font-size:1.4rem;font-weight:700;color:var(--primary);margin-bottom:6px;letter-spacing:.5px}
+.login-box p{color:var(--muted);font-size:.8rem;margin-bottom:28px}
+.field{margin-bottom:16px}
+.field label{display:block;font-size:.75rem;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}
+.field input{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);font-size:.9rem;outline:none;transition:border .2s}
+.field input:focus{border-color:var(--primary)}
+.btn{width:100%;background:var(--primary);color:#060a07;border:none;border-radius:8px;padding:11px;font-size:.9rem;font-weight:700;cursor:pointer;transition:opacity .2s}
+.btn:hover{opacity:.85}
+.err{color:var(--red);font-size:.8rem;margin-top:10px;display:none}
+
+#app{display:none;flex-direction:column;min-height:100vh}
+header{background:var(--bg2);border-bottom:1px solid var(--border);padding:14px 28px;display:flex;align-items:center;justify-content:space-between}
+header .logo{font-size:1rem;font-weight:700;color:var(--primary);letter-spacing:1px}
+header .logout{background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:5px 14px;font-size:.78rem;cursor:pointer;transition:border-color .2s}
+header .logout:hover{border-color:var(--primary);color:var(--primary)}
+.main{display:flex;flex:1}
+nav{width:200px;background:var(--bg2);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0}
+nav a{display:block;padding:10px 22px;color:var(--muted);font-size:.85rem;cursor:pointer;transition:all .2s;border-left:3px solid transparent;text-decoration:none}
+nav a:hover,nav a.active{color:var(--text);border-left-color:var(--primary);background:rgba(62,251,106,0.05)}
+.content{flex:1;padding:28px 32px;overflow-x:auto}
+.section{display:none}
+.section.active{display:block}
+h2{font-size:1.1rem;font-weight:600;margin-bottom:20px;color:var(--text)}
+
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px;margin-bottom:32px}
+.stat-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:20px 18px}
+.stat-card .label{font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
+.stat-card .value{font-size:2rem;font-weight:700;color:var(--primary);line-height:1}
+.stat-card .sub{font-size:.72rem;color:var(--muted);margin-top:4px}
+
+table{width:100%;border-collapse:collapse;font-size:.82rem}
+thead tr{border-bottom:1px solid var(--border)}
+thead th{padding:9px 12px;text-align:left;color:var(--muted);font-weight:500;text-transform:uppercase;font-size:.7rem;letter-spacing:.4px}
+tbody tr{border-bottom:1px solid rgba(62,251,106,0.05);transition:background .15s}
+tbody tr:hover{background:rgba(62,251,106,0.04)}
+tbody td{padding:9px 12px;color:var(--text)}
+.badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:.7rem;font-weight:600}
+.badge-green{background:rgba(62,251,106,0.15);color:var(--primary)}
+.badge-yellow{background:rgba(245,197,66,0.15);color:var(--yellow)}
+.badge-red{background:rgba(255,77,77,0.12);color:var(--red)}
+.badge-gray{background:rgba(255,255,255,0.06);color:var(--muted)}
+.refresh-btn{background:none;border:1px solid var(--border);color:var(--muted);border-radius:7px;padding:5px 14px;font-size:.78rem;cursor:pointer;margin-left:10px;transition:all .2s}
+.refresh-btn:hover{border-color:var(--primary);color:var(--primary)}
+.row-head{display:flex;align-items:center;margin-bottom:16px}
+.loader{text-align:center;padding:40px;color:var(--muted);font-size:.85rem}
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login-screen">
+  <div class="login-box">
+    <h1>⬡ HAMELEONWEB</h1>
+    <p>Административная панель</p>
+    <div class="field"><label>Логин</label><input id="l-login" type="text" value="" autocomplete="username"/></div>
+    <div class="field"><label>Пароль</label><input id="l-pass" type="password" autocomplete="current-password"/></div>
+    <button class="btn" onclick="doLogin()">Войти</button>
+    <div class="err" id="l-err">Неверный логин или пароль</div>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app">
+  <header>
+    <span class="logo">⬡ HAMELEONWEB ADMIN</span>
+    <button class="logout" onclick="logout()">Выйти</button>
+  </header>
+  <div class="main">
+    <nav>
+      <a class="active" onclick="showSection('dashboard')">📊 Дашборд</a>
+      <a onclick="showSection('users')">👥 Пользователи</a>
+      <a onclick="showSection('invoices')">💳 Счета</a>
+    </nav>
+    <div class="content">
+
+      <!-- DASHBOARD -->
+      <div class="section active" id="sec-dashboard">
+        <div class="row-head">
+          <h2>Дашборд</h2>
+          <button class="refresh-btn" onclick="loadStats()">↻ Обновить</button>
+        </div>
+        <div class="stats-grid" id="stats-grid">
+          <div class="loader">Загрузка…</div>
+        </div>
+      </div>
+
+      <!-- USERS -->
+      <div class="section" id="sec-users">
+        <div class="row-head">
+          <h2>Пользователи бота</h2>
+          <button class="refresh-btn" onclick="loadUsers()">↻ Обновить</button>
+        </div>
+        <div id="users-table"><div class="loader">Загрузка…</div></div>
+      </div>
+
+      <!-- INVOICES -->
+      <div class="section" id="sec-invoices">
+        <div class="row-head">
+          <h2>Счета и платежи</h2>
+          <button class="refresh-btn" onclick="loadInvoices()">↻ Обновить</button>
+        </div>
+        <div id="invoices-table"><div class="loader">Загрузка…</div></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '/api/admin-panel';
+let token = localStorage.getItem('admin_token') || '';
+
+function authHeaders() {
+  return { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token };
+}
+
+async function doLogin() {
+  const login = document.getElementById('l-login').value.trim();
+  const pass  = document.getElementById('l-pass').value;
+  const err   = document.getElementById('l-err');
+  err.style.display = 'none';
+  try {
+    const r = await fetch(API + '/login', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({login, password: pass})
+    });
+    if (!r.ok) { err.style.display = 'block'; return; }
+    const d = await r.json();
+    token = d.token;
+    localStorage.setItem('admin_token', token);
+    showApp();
+  } catch(e) { err.style.display = 'block'; }
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && document.getElementById('login-screen').style.display !== 'none') doLogin();
+});
+
+function logout() {
+  token = '';
+  localStorage.removeItem('admin_token');
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('login-screen').style.display = 'flex';
+}
+
+function showApp() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+  loadStats();
+}
+
+function showSection(name) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
+  document.getElementById('sec-' + name).classList.add('active');
+  event.currentTarget.classList.add('active');
+  if (name === 'users') loadUsers();
+  if (name === 'invoices') loadInvoices();
+}
+
+async function loadStats() {
+  const grid = document.getElementById('stats-grid');
+  grid.innerHTML = '<div class="loader">Загрузка…</div>';
+  try {
+    const r = await fetch(API + '/stats', { headers: authHeaders() });
+    if (r.status === 401) { logout(); return; }
+    const d = await r.json();
+    grid.innerHTML = `
+      <div class="stat-card"><div class="label">Пользователи в боте</div><div class="value">${d.users}</div><div class="sub">всего зарегистрировано</div></div>
+      <div class="stat-card"><div class="label">Лицензий выдано</div><div class="value">${d.licenses}</div><div class="sub">активных и пробных</div></div>
+      <div class="stat-card"><div class="label">Счетов создано</div><div class="value">${d.invoices_total}</div><div class="sub">${d.invoices_paid} оплачено</div></div>
+      <div class="stat-card"><div class="label">Загрузок программы</div><div class="value">${d.downloads}</div><div class="sub">с трекером</div></div>
+      <div class="stat-card"><div class="label">Посещений сайта</div><div class="value">${d.visits}</div><div class="sub">уникальных заходов</div></div>
+    `;
+  } catch(e) { grid.innerHTML = '<div class="loader">Ошибка загрузки</div>'; }
+}
+
+async function loadUsers() {
+  const el = document.getElementById('users-table');
+  el.innerHTML = '<div class="loader">Загрузка…</div>';
+  try {
+    const r = await fetch(API + '/users', { headers: authHeaders() });
+    if (r.status === 401) { logout(); return; }
+    const users = await r.json();
+    if (!users.length) { el.innerHTML = '<div class="loader">Нет пользователей</div>'; return; }
+    el.innerHTML = `<table>
+      <thead><tr><th>#</th><th>Telegram</th><th>Имя</th><th>Лицензий</th><th>Баланс</th><th>Дата регистрации</th></tr></thead>
+      <tbody>${users.map(u => `<tr>
+        <td style="color:var(--muted)">${u.id}</td>
+        <td>${u.username ? '<span style="color:var(--primary)">@'+u.username+'</span>' : '<span style="color:var(--muted)">'+u.telegram_id+'</span>'}</td>
+        <td>${[u.first_name, u.last_name].filter(Boolean).join(' ') || '—'}</td>
+        <td>${u.licenses > 0 ? '<span class="badge badge-green">'+u.licenses+'</span>' : '<span class="badge badge-gray">0</span>'}</td>
+        <td>${u.balance_usd > 0 ? '<span style="color:var(--primary)">$'+u.balance_usd.toFixed(2)+'</span>' : '<span style="color:var(--muted)">$0</span>'}</td>
+        <td style="color:var(--muted)">${u.created_at}</td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+  } catch(e) { el.innerHTML = '<div class="loader">Ошибка загрузки</div>'; }
+}
+
+async function loadInvoices() {
+  const el = document.getElementById('invoices-table');
+  el.innerHTML = '<div class="loader">Загрузка…</div>';
+  try {
+    const r = await fetch(API + '/invoices', { headers: authHeaders() });
+    if (r.status === 401) { logout(); return; }
+    const inv = await r.json();
+    if (!inv.length) { el.innerHTML = '<div class="loader">Нет счетов</div>'; return; }
+    el.innerHTML = `<table>
+      <thead><tr><th>#</th><th>Клиент</th><th>Сумма</th><th>Статус</th><th>ID платежа</th><th>Дата</th></tr></thead>
+      <tbody>${inv.map(i => {
+        const badges = {finished:'badge-green',pending:'badge-yellow',waiting:'badge-yellow',confirming:'badge-yellow',failed:'badge-red',expired:'badge-red'};
+        const labels = {finished:'Оплачен',pending:'Ожидание',waiting:'Ожидание',confirming:'Подтверждение',failed:'Ошибка',expired:'Истёк'};
+        const bc = badges[i.status] || 'badge-gray';
+        const bl = labels[i.status] || i.status;
+        return `<tr>
+          <td style="color:var(--muted)">${i.id}</td>
+          <td>${i.client}</td>
+          <td style="color:var(--primary);font-weight:600">$${i.amount.toFixed(2)}</td>
+          <td><span class="badge ${bc}">${bl}</span></td>
+          <td style="color:var(--muted);font-size:.75rem;font-family:monospace">${i.invoice_id || '—'}</td>
+          <td style="color:var(--muted)">${i.created_at}</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
+  } catch(e) { el.innerHTML = '<div class="loader">Ошибка загрузки</div>'; }
+}
+
+// Auto-login if token exists
+if (token) {
+  fetch(API + '/stats', { headers: authHeaders() }).then(r => {
+    if (r.ok) showApp();
+    else { token = ''; localStorage.removeItem('admin_token'); }
+  }).catch(() => {});
+}
+</script>
+</body>
+</html>

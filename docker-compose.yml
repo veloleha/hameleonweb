@@ -48,17 +48,6 @@ services:
       - api
     restart: always
 
-  # Website Builder (Vite React from Figma)
-  website:
-    build:
-      context: ../whatsapp-manager-backup-2026-06-11_23-29-19/сайт
-      dockerfile: Dockerfile
-      target: builder
-    volumes:
-      - website_build:/app/dist
-    command: sh -c "pnpm build && cp -r /app/dist/* /output/ && tail -f /dev/null"
-    restart: "no"
-
   # Nginx (web site + reverse proxy)
   nginx:
     image: nginx:alpine
@@ -66,14 +55,14 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - website_build:/usr/share/nginx/html:ro
+      - ./web:/usr/share/nginx/html:ro
+      - ./admin:/usr/share/nginx/html/admin:ro
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
       - ./data/certbot/conf:/etc/letsencrypt:ro
       - ./data/certbot/www:/var/www/certbot:ro
       - ./downloads:/var/www/downloads:ro
     depends_on:
       - api
-      - website
     restart: always
     command: '/bin/sh -c ''while :; do sleep 6h & wait $${!}; nginx -s reload; done & nginx -g "daemon off;"'''
 
@@ -86,9 +75,6 @@ services:
     entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;''"
     profiles:
       - certbot
-
-volumes:
-  website_build:
 
 networks:
   default:

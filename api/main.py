@@ -1139,6 +1139,127 @@ async def get_latest_download():
         "release_date": "2026-06-16"
     }
 
+# ============ ADMIN PANEL API ============
+
+ADMIN_LOGIN = os.getenv("ADMIN_LOGIN", "kadmin")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "alexey2000")
+ADMIN_TOKEN_SECRET = os.getenv("ADMIN_TOKEN_SECRET", JWT_SECRET + "_admin")
+
+class SiteVisit(Base):
+    __tablename__ = "site_visits"
+    id = Column(Integer, primary_key=True)
+    ip = Column(String(64))
+    path = Column(String(500))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class DownloadLog(Base):
+    __tablename__ = "download_logs"
+    id = Column(Integer, primary_key=True)
+    ip = Column(String(64))
+    filename = Column(String(500))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class AdminLoginRequest(BaseModel):
+    login: str
+    password: str
+
+@app.post("/api/admin-panel/login")
+async def admin_login(data: AdminLoginRequest):
+    if data.login == ADMIN_LOGIN and data.password == ADMIN_PASSWORD:
+        token = jwt.encode(
+            {"sub": "admin", "exp": datetime.utcnow() + timedelta(hours=12)},
+            ADMIN_TOKEN_SECRET, algorithm="HS256"
+        )
+        return {"token": token}
+    raise HTTPException(401, "Invalid credentials")
+
+def verify_admin_token(authorization: Optional[str] = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Unauthorized")
+    try:
+        payload = jwt.decode(authorization[7:], ADMIN_TOKEN_SECRET, algorithms=["HS256"])
+        if payload.get("sub") != "admin":
+            raise HTTPException(401, "Unauthorized")
+    except Exception:
+        raise HTTPException(401, "Unauthorized")
+
+@app.get("/api/admin-panel/stats")
+async def admin_stats(db: AsyncSession = Depends(get_db), _=Depends(verify_admin_token)):
+    users_count = (await db.execute(select(func.count(Client.id)))).scalar()
+    licenses_count = (await db.execute(select(func.count(License.id)))).scalar()
+    invoices_total = (await db.execute(select(func.count(Purchase.id)))).scalar()
+    invoices_paid = (await db.execute(
+        select(func.count(Purchase.id)).where(Purchase.payment_status == "finished")
+    )).scalar()
+    visits_count = (await db.execute(select(func.count(SiteVisit.id)))).scalar()
+    downloads_count = (await db.execute(select(func.count(DownloadLog.id)))).scalar()
+    return {
+        "users": users_count,
+        "licenses": licenses_count,
+        "invoices_total": invoices_total,
+        "invoices_paid": invoices_paid,
+        "visits": visits_count,
+        "downloads": downloads_count,
+    }
+
+@app.get("/api/admin-panel/users")
+async def admin_users(db: AsyncSession = Depends(get_db), _=Depends(verify_admin_token)):
+    result = await db.execute(select(Client).order_by(Client.created_at.desc()))
+    clients = result.scalars().all()
+    out = []
+    for c in clients:
+        lics = (await db.execute(
+            select(func.count(License.id)).where(License.client_id == c.id)
+        )).scalar()
+        out.append({
+            "id": c.id,
+            "telegram_id": c.telegram_id,
+            "username": c.username or "",
+            "first_name": c.first_name or "",
+            "last_name": c.last_name or "",
+            "balance_usd": (c.balance_usd or 0) / 100,
+            "licenses": lics,
+            "created_at": c.created_at.strftime("%Y-%m-%d %H:%M") if c.created_at else "",
+        })
+    return out
+
+@app.get("/api/admin-panel/invoices")
+async def admin_invoices(db: AsyncSession = Depends(get_db), _=Depends(verify_admin_token)):
+    result = await db.execute(select(Purchase).order_by(Purchase.created_at.desc()).limit(200))
+    purchases = result.scalars().all()
+    out = []
+    for p in purchases:
+        client = (await db.execute(select(Client).where(Client.id == p.client_id))).scalar_one_or_none()
+        out.append({
+            "id": p.id,
+            "client": f"@{client.username}" if client and client.username else str(p.client_id),
+            "amount": p.total_price_usd / 100,
+            "status": p.payment_status,
+            "invoice_id": p.invoice_id or "",
+            "created_at": p.created_at.strftime("%Y-%m-%d %H:%M") if p.created_at else "",
+        })
+    return out
+
+@app.post("/api/admin-panel/track-visit")
+async def track_visit(request: Request, db: AsyncSession = Depends(get_db)):
+    ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "")
+    path = (await request.json()).get("path", "/") if request.headers.get("content-type", "").startswith("application/json") else "/"
+    db.add(SiteVisit(ip=ip[:64], path=str(path)[:500]))
+    await db.commit()
+    return {"ok": True}
+
+@app.post("/api/admin-panel/track-download")
+async def track_download(request: Request, db: AsyncSession = Depends(get_db)):
+    ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "")
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    db.add(DownloadLog(ip=ip[:64], filename=str(body.get("filename", "unknown"))[:500]))
+    await db.commit()
+    return {"ok": True}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

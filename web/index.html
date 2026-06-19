@@ -125,6 +125,65 @@
         .feature-card p {
             color: #8b949e;
         }
+
+        .demo-section {
+            display: grid;
+            grid-template-columns: 1.1fr 0.9fr;
+            gap: 30px;
+            align-items: center;
+            background: #161b22;
+            border-radius: 24px;
+            padding: 40px;
+            margin-bottom: 80px;
+            border: 1px solid #21262d;
+        }
+
+        .demo-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(0, 255, 136, 0.12);
+            color: #00ff88;
+            border: 1px solid rgba(0, 255, 136, 0.24);
+            border-radius: 999px;
+            padding: 8px 14px;
+            font-size: 0.85rem;
+            font-weight: 700;
+            margin-bottom: 18px;
+        }
+
+        .demo-section h2 {
+            font-size: 2rem;
+            margin-bottom: 14px;
+            color: #f0f6fc;
+        }
+
+        .demo-section p {
+            color: #8b949e;
+            margin-bottom: 24px;
+        }
+
+        .screenshot-box {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 18px;
+            padding: 12px;
+            overflow: hidden;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+        }
+
+        .screenshot-box img {
+            width: 100%;
+            display: block;
+            border-radius: 12px;
+        }
+
+        .screenshot-note {
+            margin-top: 10px;
+            text-align: center;
+            font-size: 0.85rem;
+            color: #8b949e;
+        }
         
         .pricing {
             text-align: center;
@@ -242,11 +301,12 @@
         <h1>HAMELEONWEB</h1>
         <p class="subtitle">
             Автоматическая запись звонков WhatsApp.<br>
-            Сохраняйте важные разговоры в MP3 с распознаванием номера собеседника.
+            Сохраняйте важные разговоры в MP3 с распознаванием номера собеседника.<br>
+            Демо доступно 7 дней бесплатно.
         </p>
         
         <div class="cta-section">
-            <a href="/download/HAMELEONWEB_Setup.exe" class="btn btn-primary">
+            <a href="/download/HAMELEONWEB-Setup-0.1.0.exe" class="btn btn-primary" download>
                 📥 Скачать для Windows
             </a>
             <a href="https://t.me/HameleonWebBot" class="btn btn-secondary" target="_blank">
@@ -279,6 +339,27 @@
                 <div class="feature-icon">👥</div>
                 <h3>Мультиаккаунт</h3>
                 <p>Работайте с несколькими WhatsApp аккаунтами одновременно.</p>
+            </div>
+        </section>
+
+        <section class="demo-section">
+            <div>
+                <div class="demo-badge">🧪 Демо 7 дней</div>
+                <h2>Попробуйте HAMELEONWEB бесплатно</h2>
+                <p>
+                    Полный доступ к приложению на 7 дней после первой активации через Telegram-бота.
+                    Посмотрите, как выглядит интерфейс, и протестируйте автозапись звонков на своих аккаунтах.
+                </p>
+                <div class="cta-section" style="margin: 0; justify-content: flex-start;">
+                    <a href="https://t.me/HameleonWebBot" class="btn btn-primary" target="_blank">Активировать демо</a>
+                    <a href="https://t.me/HameleonWebBot" class="btn btn-secondary" target="_blank">Купить лицензию</a>
+                </div>
+            </div>
+            <div>
+                <div class="screenshot-box">
+                    <img src="/app-screenshot.png" alt="Скриншот HAMELEONWEB из программы" onerror="this.onerror=null;this.src='/hameleonweb.png'">
+                </div>
+                <div class="screenshot-note">Реальный интерфейс программы</div>
             </div>
         </section>
         
@@ -330,5 +411,23 @@
         <p>© 2026 HAMELEONWEB. Все права защищены.</p>
         <p>Поддержка: <a href="https://t.me/admin" style="color: #00ff88;">@admin</a></p>
     </footer>
+
+    <script>
+        fetch('/api/admin-panel/track-visit', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ path: window.location.pathname })
+        }).catch(() => {});
+
+        document.querySelectorAll('a[download]').forEach((link) => {
+            link.addEventListener('click', () => {
+                fetch('/api/admin-panel/track-download', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ filename: link.getAttribute('href') || 'download' })
+                }).catch(() => {});
+            });
+        });
+    </script>
 </body>
 </html>

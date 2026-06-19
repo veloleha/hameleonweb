@@ -107,8 +107,9 @@ def get_tariff(tariff_id):
 def get_tariff_unit_price(tariff, qty=1, is_first_month=False):
     base_price = float(tariff.get("price", 0) or 0)
     bulk_price = tariff.get("bulk_price")
+    bulk_min_qty = int(tariff.get("bulk_min_qty", 0) or 0)
 
-    if bulk_price is not None and is_first_month:
+    if bulk_price is not None and bulk_min_qty and qty >= bulk_min_qty:
         try:
             return float(bulk_price)
         except (TypeError, ValueError):
@@ -193,7 +194,7 @@ async def activate_after_payment(payment_id: str, info: dict):
                 'reason': 'topup',
             })
 
-        if ptype == 'license':
+        if ptype in ('license', 'renew'):
             tariff = info.get('tariff', {})
             qty = info.get('qty', 1)
             license_days = 30 * qty
@@ -310,8 +311,8 @@ class BuyFlow(StatesGroup):
     selecting_quantity = State()
     confirming = State()
 
-class TopupFlow(StatesGroup):
-    entering_amount = State()
+class RenewFlow(StatesGroup):
+    confirming = State()
 
 # Main Menu
 @router.message(Command("start"))
@@ -334,17 +335,36 @@ async def cmd_start(message: Message):
     except Exception as exc:
         logger.warning('Failed to sync client to API: %s', exc)
 
+    # Auto-activate trial for new users
+    trial_note = ""
+    try:
+        data_cl = await api_post('/api/clients/upsert', {
+            'telegram_id': tg_id, 'username': username,
+            'first_name': message.from_user.first_name, 'last_name': message.from_user.last_name,
+        })
+        client_id_check = data_cl.get('client_id')
+        async with httpx.AsyncClient(timeout=8.0) as hc:
+            r_lic = await hc.get(f"{API_URL}/api/admin/licenses/{client_id_check}")
+            lics = r_lic.json() if r_lic.status_code == 200 else []
+        if not lics:
+            async with httpx.AsyncClient(timeout=8.0) as hc:
+                r_trial = await hc.post(f"{API_URL}/api/trial/start",
+                    json={'telegram_id': tg_id}, headers={'Authorization': 'Bearer internal'})
+                if r_trial.status_code == 200:
+                    trial_note = "\n\n🧪 <b>Пробный период активирован!</b> 7 дней бесплатно."
+    except Exception:
+        pass
+
     text = f"""🎛️ <b>HAMELEONWEB</b>
 
 👤 <b>Ваш ID:</b> <code>{tg_id}</code>
-{f'👤 @{username}' if username else ''}{balance_str}
+{f'👤 @{username}' if username else ''}{balance_str}{trial_note}
 
 <b>Навигация:</b>
 🛒 Купить лицензию — выбор пакета
-� Баланс — пополнить для автопродления
+🔄 Продлить подписку — продление активных лицензий
 � Мои лицензии — список и ключи
- Мои устройства — привязанные ПК
-🧪 Пробный период — 7 дней бесплатно"""
+ Мои устройства — привязанные ПК"""
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [{"text": "🛒 Купить", "callback_data": "menu:buy"}, {"text": "📋 Лицензии", "callback_data": "menu:licenses"}],
@@ -403,54 +423,26 @@ async def select_package(callback: CallbackQuery, state: FSMContext):
 
     await state.update_data(selected_tariff=tariff, qty=1)
 
-    first_price = get_tariff_unit_price(tariff, 1, is_first_month=True)
-    std_price = get_tariff_unit_price(tariff, 1, is_first_month=False)
-    has_first_month_promo = tariff.get('bulk_price') and float(tariff.get('bulk_price', 0)) < std_price
+    std_price = float(tariff.get('price', 0))
+    bulk_price = tariff.get('bulk_price')
+    bulk_min = int(tariff.get('bulk_min_qty', 0) or 0)
+    has_bulk = bulk_price and bulk_min
 
-    pricing_text = (
-        f"💡 Первый месяц: <b>${first_price:g} USDT</b>\n"
-        f"💰 Далее: <b>${std_price:g} USDT / мес</b>"
-    ) if has_first_month_promo else f"💰 <b>${std_price:g} USDT / {tariff.get('period', 'мес')}</b>"
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [{"text": f"✅ Оплатить ${first_price:g} USDT (1 мес)", "callback_data": "qty:1"}],
-        [{"text": "◀️ Назад", "callback_data": "menu:buy"}]
-    ])
+    pricing_text = f"� <b>${std_price:g} USDT / {tariff.get('period', 'мес')}</b>"
+    if has_bulk:
+        pricing_text += f"\n� От {bulk_min} лиц.: <b>${float(bulk_price):g} USDT/шт</b> (первый месяц)"
 
     await callback.message.edit_text(
         f"<b>{tariff['name']}</b>\n\n"
         f"{pricing_text}\n\n"
-        f"{tariff.get('desc', '')}",
-        reply_markup=keyboard,
+        f"{tariff.get('desc', '')}\n\n"
+        f"✏️ Введите количество лицензий цифрой:",
+        
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[{"text": "◀️ Назад", "callback_data": "menu:buy"}]]),
         parse_mode="HTML"
     )
     await state.set_state(BuyFlow.selecting_quantity)
 
-@router.callback_query(F.data.startswith("qty:"), BuyFlow.selecting_quantity)
-async def select_qty(callback: CallbackQuery, state: FSMContext):
-    await safe_callback_answer(callback)
-    qty = int(callback.data.split(":")[1])
-    data = await state.get_data()
-    tariff = data.get("selected_tariff") or {}
-    await state.update_data(qty=qty)
-    is_first = qty == 1 and tariff.get('bulk_price')
-    total = get_tariff_unit_price(tariff, qty, is_first_month=bool(is_first)) * qty
-    
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [{"text": "💳 Оплатить (NOWPayments)", "callback_data": "pay:nowpayments"}],
-        [{"text": "◀️ Назад", "callback_data": "menu:buy"}]
-    ])
-    
-    await callback.message.edit_text(
-        f"📋 <b>Подтверждение</b>\n\n"
-        f"Тариф: <b>{tariff.get('name', '—')}</b>\n"
-        f"Количество: {qty}\n"
-        f"Итого: ${total:g} {tariff.get('currency', 'USDT')}\n\n"
-        f"Оплата криптовалютой USDT (TRC20)",
-        reply_markup=keyboard,
-        parse_mode="HTML"
-    )
-    await state.set_state(BuyFlow.confirming)
 
 
 @router.message(BuyFlow.selecting_quantity, F.text.regexp(r"^\d+$"))
@@ -463,18 +455,23 @@ async def quantity_as_number(message: Message, state: FSMContext):
         await message.answer("❌ Введите число больше 0.")
         return
 
-    total = get_tariff_total_price(tariff, qty)
+    await state.update_data(qty=qty)
+    unit = get_tariff_unit_price(tariff, qty)
+    total = unit * qty
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [{"text": "💳 Оплатить (NOWPayments)", "callback_data": "pay:nowpayments"}],
         [{"text": "◀️ Назад", "callback_data": "menu:buy"}]
     ])
 
+    bulk_min = int(tariff.get('bulk_min_qty', 0) or 0)
+    promo_note = f" (скидка от {bulk_min} лиц.)" if bulk_min and qty >= bulk_min else ""
+
     await message.answer(
         f"📋 <b>Подтверждение</b>\n\n"
         f"Тариф: <b>{tariff.get('name', '—')}</b>\n"
-        f"Количество: {qty}\n"
-        f"Итого: ${total:g} {tariff.get('currency', 'USDT')}\n\n"
+        f"Количество: {qty} × ${unit:g} USDT{promo_note}\n"
+        f"Итого: <b>${total:g} USDT</b>\n\n"
         f"Оплата криптовалютой USDT (TRC20)",
         reply_markup=keyboard,
         parse_mode="HTML"
@@ -549,7 +546,7 @@ async def pay_nowpayments(callback: CallbackQuery, state: FSMContext):
 
 @router.message(BuyFlow.selecting_quantity)
 async def quantity_text_invalid(message: Message):
-    await message.answer("Введите количество лицензий **цифрой**. Например: 1, 5 или 10.")
+    await message.answer("❌ Введите количество лицензий цифрой. Например: 1, 5 или 10.")
 
 @router.callback_query(F.data == "menu:licenses")
 async def menu_licenses(callback: CallbackQuery):
@@ -606,60 +603,90 @@ async def generate_code(callback: CallbackQuery):
         parse_mode="HTML"
     )
 
-@router.callback_query(F.data == "menu:topup")
-async def menu_topup(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data == "menu:renew")
+async def menu_renew(callback: CallbackQuery, state: FSMContext):
     await safe_callback_answer(callback)
     tg_id = callback.from_user.id
 
-    balance_line = ""
     try:
         data = await api_post('/api/clients/upsert', {
             'telegram_id': tg_id, 'username': callback.from_user.username or '',
             'first_name': callback.from_user.first_name, 'last_name': callback.from_user.last_name,
         })
         client_id = data.get('client_id')
-        async with httpx.AsyncClient(timeout=8.0) as hc:
-            r = await hc.get(f"{API_URL}/api/admin/balance/{client_id}")
-            if r.status_code == 200:
-                bal = r.json().get('balance_usd', 0)
-                balance_line = f"\n\nТекущий баланс: <b>${bal:.2f}</b>"
-    except Exception:
-        pass
+        async with httpx.AsyncClient(timeout=10.0) as hc:
+            r_lic = await hc.get(f"{API_URL}/api/admin/licenses/{client_id}")
+            licenses = r_lic.json() if r_lic.status_code == 200 else []
+    except Exception as exc:
+        await callback.message.edit_text(
+            f"❌ Ошибка загрузки лицензий: {exc}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[{"text": "◀️ Назад", "callback_data": "nav:menu"}]])
+        )
+        return
+
+    active_lics = [l for l in licenses if l.get('status') in ('active', 'trial')]
+    if not active_lics:
+        await callback.message.edit_text(
+            "ℹ️ <b>Нет активных лицензий для продления.</b>\n\nСначала купите лицензию.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [{"text": "🛒 Купить", "callback_data": "menu:buy"}],
+                [{"text": "◀️ Назад", "callback_data": "nav:menu"}]
+            ]),
+            parse_mode="HTML"
+        )
+        return
+
+    tariffs = load_tariffs()
+    std_price = float(tariffs[0].get('price', 10)) if tariffs else 10.0
+    total = std_price * len(active_lics)
+
+    lic_lines = ""
+    for l in active_lics:
+        expires = l.get('expires_at', '—')[:10] if l.get('expires_at') else '—'
+        lic_lines += f"  • <code>{l.get('license_key', '—')}</code> (до {expires})\n"
+
+    await state.update_data(renew_client_id=client_id, renew_total=total, renew_count=len(active_lics))
 
     await callback.message.edit_text(
-        f"💰 <b>Пополнение баланса</b>{balance_line}\n\n"
-        f"Баланс используется для <b>автоматического продления</b> лицензии.\n"
-        f"Списание происходит за 24 часа до окончания срока.\n\n"
-        f"Введите сумму пополнения в USD (минимум $1):",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[{"text": "◀️ Назад", "callback_data": "nav:menu"}]]),
+        f"� <b>Продление подписки</b>\n\n"
+        f"Активных лицензий: <b>{len(active_lics)}</b>\n"
+        f"{lic_lines}\n"
+        f"Стоимость продления (30 дней): <b>${total:g} USDT</b>\n\n"
+        f"Оплата криптовалютой USDT (TRC20)",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [{"text": f"💳 Оплатить ${total:g} USDT", "callback_data": "renew:pay"}],
+            [{"text": "◀️ Назад", "callback_data": "nav:menu"}]
+        ]),
         parse_mode="HTML"
     )
-    await state.set_state(TopupFlow.entering_amount)
+    await state.set_state(RenewFlow.confirming)
 
 
-@router.message(TopupFlow.entering_amount)
-async def topup_enter_amount(message: Message, state: FSMContext):
-    try:
-        amount = float(message.text.strip().replace(",", ".").replace("$", ""))
-    except ValueError:
-        await message.answer("❌ Введите корректную сумму, например: 10 или 25.50")
+@router.callback_query(F.data == "renew:pay", RenewFlow.confirming)
+async def renew_pay(callback: CallbackQuery, state: FSMContext):
+    await safe_callback_answer(callback)
+    if not NOWPAYMENTS_API_KEY:
+        await callback.message.edit_text(
+            "❌ Оплата временно недоступна. Обратитесь к администратору.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[{"text": "◀️ Назад", "callback_data": "nav:menu"}]])
+        )
         return
 
-    if amount < 1:
-        await message.answer("❌ Минимальная сумма пополнения — $1")
-        return
+    data = await state.get_data()
+    total = data.get('renew_total', 0)
+    client_id = data.get('renew_client_id')
+    tg_id = callback.from_user.id
 
-    tg_id = message.from_user.id
-    await message.answer("⏳ Создаю платёж...")
+    await callback.message.edit_text("⏳ Создаю счёт на продление...")
 
-    invoice = await asyncio.to_thread(create_nowpayments_payment, amount, tg_id)
+    invoice = await asyncio.to_thread(create_nowpayments_payment, total, tg_id)
 
     if invoice.get('error'):
         details = invoice.get('details') or invoice.get('exception') or ''
         err_msg = details.get('message', str(details)) if isinstance(details, dict) else str(details)
-        await message.answer(
+        await callback.message.edit_text(
             f"❌ Не удалось создать платёж:\n<code>{err_msg}</code>",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[{"text": "◀️ В меню", "callback_data": "nav:menu"}]]),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[{"text": "◀️ Назад", "callback_data": "nav:menu"}]]),
             parse_mode="HTML"
         )
         await state.clear()
@@ -667,39 +694,29 @@ async def topup_enter_amount(message: Message, state: FSMContext):
 
     payment_id = str(invoice.get('payment_id', ''))
     pay_address = invoice.get('pay_address', '—')
-    pay_amount = invoice.get('pay_amount', amount)
+    pay_amount = invoice.get('pay_amount', total)
     pay_currency = str(invoice.get('pay_currency', 'USDTTRC20')).upper()
     network = str(invoice.get('network', 'TRC20')).upper()
 
-    # Register for background polling
-    try:
-        data_up = await api_post('/api/clients/upsert', {
-            'telegram_id': tg_id, 'username': message.from_user.username or '',
-            'first_name': message.from_user.first_name, 'last_name': message.from_user.last_name,
-        })
-        cid = data_up.get('client_id', tg_id)
-    except Exception:
-        cid = tg_id
     if payment_id:
         pending_payments[payment_id] = {
-            'client_id': cid,
+            'client_id': client_id,
             'tg_id': tg_id,
-            'chat_id': message.chat.id,
-            'amount_usd': amount,
-            'type': 'topup',
+            'chat_id': callback.message.chat.id,
+            'amount_usd': total,
+            'type': 'renew',
             'created_at': datetime.utcnow().timestamp(),
         }
 
     await state.clear()
-    await message.answer(
-        f"✅ <b>Платёж создан!</b>\n\n"
+    await callback.message.edit_text(
+        f"✅ <b>Счёт на продление создан!</b>\n\n"
         f"ID: <code>{payment_id}</code>\n\n"
         f"Отправьте: <b>{pay_amount} {pay_currency}</b>\n"
         f"Сеть: <b>{network}</b>\n"
         f"Адрес:\n<code>{pay_address}</code>\n\n"
-        f"⏰ Платёж действителен 1 час\n"
-        f"После подтверждения баланс пополнится автоматически.\n"
-        f"Лицензия будет продлена при следующем списании.",
+        f"⏰ Счёт действителен 1 час\n"
+        f"После оплаты все лицензии будут продлены на 30 дней автоматически.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[{"text": "◀️ В меню", "callback_data": "nav:menu"}]]),
         parse_mode="HTML"
     )
