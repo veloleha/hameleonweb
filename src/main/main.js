@@ -1021,10 +1021,9 @@ function registerIpc(userDataPath, recorder, sharedDataPath) {
 
       _pendingInstallerPath = destPath;
 
-      const { spawn } = require('child_process');
-      spawn(destPath, ['/S'], { detached: true, stdio: 'ignore' }).unref();
+      await shell.openPath(destPath);
 
-      setTimeout(() => app.quit(), 1500);
+      setTimeout(() => app.quit(), 2000);
       return { ok: true };
     } catch (e) {
       return { error: String(e.message || e) };
