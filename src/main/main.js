@@ -1033,6 +1033,14 @@ function registerIpc(userDataPath, recorder, sharedDataPath) {
   const _mainLog = (msg) => { try { fs.appendFileSync(path.join(os.tmpdir(), 'hameleonweb-main.log'), new Date().toISOString() + ' ' + msg + '\n'); } catch(e){} };
   _mainLog('IPC handlers registered');
 
+  const sendRecEvent = (event, data) => {
+    try {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(event, data);
+      }
+    } catch (e) {}
+  };
+
   ipcMain.on('wa:mic-on', (_e, { accountId }) => {
     try {
       console.log('[wa:mic-on]', { accountId });
@@ -1047,6 +1055,7 @@ function registerIpc(userDataPath, recorder, sharedDataPath) {
     if (!account) return;
 
     const callMeta = callMetaByAccountId.get(accountId) || {};
+    sendRecEvent('rec:started', { accountId, accountName: account.name, startedAt: Date.now() });
 
     recorder.startCandidateRecording(accountId, {
       recordingsPath: ensureRecordingsPath(settings, userDataPath),
@@ -1065,6 +1074,7 @@ function registerIpc(userDataPath, recorder, sharedDataPath) {
     } catch (e) {}
     recorder.stopIfRecording(accountId, { deleteIfUnconfirmed: true });
     callMetaByAccountId.delete(accountId);
+    sendRecEvent('rec:stopped', { accountId });
   });
 
   ipcMain.on('wa:call-started', (_e, { accountId, peerLabel }) => {
@@ -1093,6 +1103,7 @@ function registerIpc(userDataPath, recorder, sharedDataPath) {
               console.log('[wa:inject-error]', e && e.message);
             });
           }
+          sendRecEvent('rec:started', { accountId, accountName: account.name, startedAt: Date.now() });
           recorder.startTabRecording(accountId, {
             recordingsPath: ensureRecordingsPath(settings, userDataPath),
             ...buildRecordingMeta(account.name, callMeta.peerLabel),
@@ -1127,6 +1138,7 @@ function registerIpc(userDataPath, recorder, sharedDataPath) {
     } catch (e) {}
     recorder.stopIfRecording(accountId, { deleteIfUnconfirmed: true });
     callMetaByAccountId.delete(accountId);
+    sendRecEvent('rec:stopped', { accountId });
   });
 }
 

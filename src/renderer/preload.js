@@ -36,4 +36,14 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('update:download-progress', handler);
     return () => ipcRenderer.removeListener('update:download-progress', handler);
   },
+  onRecStarted: (cb) => {
+    const handler = (_e, data) => cb(data);
+    ipcRenderer.on('rec:started', handler);
+    return () => ipcRenderer.removeListener('rec:started', handler);
+  },
+  onRecStopped: (cb) => {
+    const handler = (_e, data) => cb(data);
+    ipcRenderer.on('rec:stopped', handler);
+    return () => ipcRenderer.removeListener('rec:stopped', handler);
+  },
 });

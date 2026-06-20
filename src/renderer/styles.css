@@ -454,3 +454,44 @@ body {
 .resize-handle:hover {
   background: var(--accent);
 }
+
+.rec-indicator {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: rgba(255, 60, 60, 0.10);
+  border: 1px solid rgba(255, 60, 60, 0.25);
+}
+
+.rec-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #ff3c3c;
+  flex-shrink: 0;
+  animation: rec-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes rec-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(255, 60, 60, 0.5); }
+  50% { opacity: 0.4; box-shadow: 0 0 0 5px rgba(255, 60, 60, 0); }
+}
+
+.rec-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #ff6060;
+  text-transform: uppercase;
+}
+
+.rec-timer {
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #ffaaaa;
+  margin-left: auto;
+}

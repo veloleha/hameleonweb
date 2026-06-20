@@ -1257,4 +1257,52 @@ function initResizableSidebar() {
   });
 }
 
+function initRecIndicator() {
+  const indicator = el('recIndicator');
+  const timerEl = el('recTimer');
+  const labelEl = el('recLabel');
+  if (!indicator || !timerEl) return;
+
+  let timerInterval = null;
+  let recStartedAt = null;
+
+  function formatDuration(ms) {
+    const totalSec = Math.floor(ms / 1000);
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    if (h > 0) {
+      return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    }
+    return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  }
+
+  function startIndicator(data) {
+    recStartedAt = data.startedAt || Date.now();
+    if (labelEl && data.accountName) {
+      labelEl.textContent = `REC · ${data.accountName}`;
+    } else if (labelEl) {
+      labelEl.textContent = 'REC';
+    }
+    timerEl.textContent = '00:00';
+    indicator.classList.remove('hidden');
+    if (timerInterval) clearInterval(timerInterval);
+    timerInterval = setInterval(() => {
+      timerEl.textContent = formatDuration(Date.now() - recStartedAt);
+    }, 1000);
+  }
+
+  function stopIndicator() {
+    indicator.classList.add('hidden');
+    if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+    recStartedAt = null;
+    if (timerEl) timerEl.textContent = '00:00';
+    if (labelEl) labelEl.textContent = 'REC';
+  }
+
+  if (window.api.onRecStarted) window.api.onRecStarted(startIndicator);
+  if (window.api.onRecStopped) window.api.onRecStopped(stopIndicator);
+}
+
+initRecIndicator();
 init();
