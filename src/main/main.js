@@ -978,11 +978,47 @@ function registerIpc(userDataPath, recorder, sharedDataPath) {
       const fileName = url.split('/').pop() || 'HAMELEONWEB-Update.exe';
       const destPath = path.join(tmpDir, fileName);
 
-      const res = await fetch(url);
-      if (!res.ok) return { error: `Download failed: ${res.status}` };
+      await new Promise((resolve, reject) => {
+        const https = require('https');
+        const http = require('http');
+        const proto = url.startsWith('https') ? https : http;
 
-      const buffer = Buffer.from(await res.arrayBuffer());
-      fs.writeFileSync(destPath, buffer);
+        const doRequest = (requestUrl) => {
+          proto.get(requestUrl, (res) => {
+            if (res.statusCode === 301 || res.statusCode === 302) {
+              doRequest(res.headers.location);
+              return;
+            }
+            if (res.statusCode !== 200) {
+              reject(new Error(`Download failed: HTTP ${res.statusCode}`));
+              return;
+            }
+
+            const total = parseInt(res.headers['content-length'] || '0', 10);
+            let received = 0;
+            const fileStream = fs.createWriteStream(destPath);
+
+            res.on('data', (chunk) => {
+              received += chunk.length;
+              if (total > 0 && mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('update:download-progress', {
+                  percent: Math.round((received / total) * 100),
+                  received,
+                  total,
+                });
+              }
+            });
+
+            res.pipe(fileStream);
+            fileStream.on('finish', () => { fileStream.close(); resolve(); });
+            fileStream.on('error', reject);
+            res.on('error', reject);
+          }).on('error', reject);
+        };
+
+        doRequest(url);
+      });
+
       _pendingInstallerPath = destPath;
 
       const { spawn } = require('child_process');

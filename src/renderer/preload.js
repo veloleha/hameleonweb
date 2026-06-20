@@ -30,5 +30,10 @@ contextBridge.exposeInMainWorld('api', {
   openRecordingsFolder: () => ipcRenderer.invoke('recordings:openFolder'),
 
   checkUpdate: () => ipcRenderer.invoke('app:checkUpdate'),
-  installUpdate: () => ipcRenderer.invoke('app:installUpdate'),
+  installUpdate: (opts) => ipcRenderer.invoke('app:installUpdate', opts),
+  onDownloadProgress: (cb) => {
+    const handler = (_e, data) => cb(data);
+    ipcRenderer.on('update:download-progress', handler);
+    return () => ipcRenderer.removeListener('update:download-progress', handler);
+  },
 });

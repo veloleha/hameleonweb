@@ -1089,13 +1089,27 @@ async function bindSettings() {
           if (btnInstall) {
             btnInstall.addEventListener('click', async () => {
               btnInstall.disabled = true;
-              if (statusEl) statusEl.innerHTML += '<br>⏳ Скачиваю установщик...';
+              const progressId = 'dlProgressLine';
+              if (statusEl) statusEl.innerHTML += `<br><span id="${progressId}">⏳ Скачиваю установщик... 0%</span>`;
+
+              let unsubscribe = null;
+              if (window.api.onDownloadProgress) {
+                unsubscribe = window.api.onDownloadProgress((data) => {
+                  const progressEl = document.getElementById(progressId);
+                  if (progressEl) progressEl.textContent = `⏳ Скачиваю установщик... ${data.percent}%`;
+                });
+              }
+
               const r = await window.api.installUpdate({ url: res.url });
+              if (unsubscribe) unsubscribe();
+
               if (r && r.error) {
-                if (statusEl) statusEl.innerHTML += `<br>❌ ${r.error}`;
+                const progressEl = document.getElementById(progressId);
+                if (progressEl) progressEl.textContent = `❌ ${r.error}`;
                 btnInstall.disabled = false;
               } else {
-                if (statusEl) statusEl.innerHTML += '<br>✅ Установщик запущен. Приложение закроется...';
+                const progressEl = document.getElementById(progressId);
+                if (progressEl) progressEl.textContent = '✅ Установщик запущен. Приложение закроется...';
               }
             });
           }
