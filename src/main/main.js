@@ -974,9 +974,9 @@ function registerIpc(userDataPath, recorder, sharedDataPath) {
 
   ipcMain.handle('app:installUpdate', async (_e, { url }) => {
     try {
-      const tmpDir = os.tmpdir();
+      const downloadsDir = app.getPath('downloads');
       const fileName = url.split('/').pop() || 'HAMELEONWEB-Update.exe';
-      const destPath = path.join(tmpDir, fileName);
+      const destPath = path.join(downloadsDir, fileName);
 
       await new Promise((resolve, reject) => {
         const https = require('https');
