@@ -825,6 +825,26 @@ async def start_trial(payload: dict = Depends(verify_token), db: AsyncSession = 
         "trial_days": trial_days
     }
 
+@app.get("/api/device/trial-status")
+async def device_trial_status(payload: dict = Depends(verify_token), db: AsyncSession = Depends(get_db)):
+    """Check if the current device has already used a trial license"""
+    device_id = payload.get("device_id")
+    if not device_id:
+        return {"trial_used": False, "device_id": None}
+
+    result = await db.execute(
+        select(License).where(
+            License.fingerprint == device_id,
+            License.trial_used == True
+        )
+    )
+    used = result.scalar_one_or_none()
+    return {
+        "trial_used": used is not None,
+        "device_id": device_id,
+        "expired_at": used.expires_at.isoformat() if used and used.expires_at else None
+    }
+
 # ============ BALANCE ENDPOINTS ============
 
 @app.get("/api/balance/me")
