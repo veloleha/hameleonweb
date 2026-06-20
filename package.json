@@ -1,19 +1,23 @@
 {
   "name": "whatsapp-manager",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder"
+    "obfuscate": "node scripts/obfuscate.js",
+    "dist": "npm run obfuscate && electron-builder --config electron-builder-obf.json",
+    "dist:clean": "electron-builder"
   },
   "dependencies": {
-    "@ffmpeg-installer/ffmpeg": "^1.1.0"
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "node-machine-id": "^1.1.12"
   },
   "devDependencies": {
     "electron": "^31.0.0",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^24.13.3",
+    "javascript-obfuscator": "^5.4.3"
   },
   "build": {
     "appId": "com.hameleonweb.app",
@@ -21,6 +25,7 @@
     "files": [
       "src/**/*",
       "node_modules/@ffmpeg-installer/**/*",
+      "node_modules/node-machine-id/**/*",
       "hameleonweb.png",
       "hameleonweb.svg",
       "hameleonweb.ico",
@@ -29,14 +34,29 @@
     "asar": true,
     "asarUnpack": [
       "**/node_modules/@ffmpeg-installer/**/*",
+      "**/node_modules/node-machine-id/**/*",
       "**/*.exe",
       "**/*.dll"
     ],
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "hameleonweb.ico"
+    },
+    "portable": {
+      "artifactName": "HAMELEONWEB-Portable-${version}.exe"
     },
     "nsis": {
       "oneClick": false,

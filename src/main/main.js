@@ -1,6 +1,7 @@
 ﻿const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const crypto = require('crypto');
 const { app, BrowserWindow, BrowserView, ipcMain, dialog, shell, session } = require('electron');
 
 const { loadAccounts, createAccount, renameAccount, deleteAccount } = require('./accounts');
@@ -339,7 +340,34 @@ function getApiBaseUrl(_userDataPath) {
 function buildDeviceInfo(userDataPath) {
   const host = os.hostname() || 'desktop';
   const userName = process.env.USERNAME || process.env.USER || 'user';
-  const deviceId = `hameleonweb-${host}`;
+
+  // Source 1: hardware fingerprint via node-machine-id
+  let hwId = '';
+  try {
+    const { machineIdSync } = require('node-machine-id');
+    hwId = machineIdSync(true);
+  } catch (_) {}
+
+  // Source 2: persistent UUID file in userData
+  let fileUuid = '';
+  try {
+    const uuidFile = path.join(userDataPath || app.getPath('userData'), '.device-uuid');
+    if (fs.existsSync(uuidFile)) {
+      fileUuid = fs.readFileSync(uuidFile, 'utf8').trim();
+    } else {
+      fileUuid = crypto.randomUUID();
+      fs.writeFileSync(uuidFile, fileUuid, { encoding: 'utf8', flag: 'wx' });
+    }
+  } catch (_) {}
+
+  // Combine both: hardware wins, file is fallback
+  const combined = hwId || fileUuid || host;
+  const deviceId = crypto
+    .createHash('sha256')
+    .update(`hameleonweb:${combined}`)
+    .digest('hex')
+    .slice(0, 32);
+
   const deviceName = `${host} (${userName})`;
   return { deviceId, deviceName };
 }
@@ -474,11 +502,39 @@ async function startTrialFromApi(authPath, settingsPath) {
   };
 }
 
+async function checkDeviceTrialStatus(authPath, settingsPath) {
+  const spPath = settingsPath || authPath;
+  const auth = loadAuthState(authPath);
+  if (!auth.accessToken) return { trial_used: false };
+  try {
+    return await apiJson(spPath, '/api/device/trial-status', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${auth.accessToken}` },
+    });
+  } catch (_) {
+    return { trial_used: false };
+  }
+}
+
 async function ensureActiveLicenseOrTrial(authPath, settingsPath) {
   const spPath = settingsPath || authPath;
   let auth = await refreshLicensesFromApi(authPath, spPath);
   if (pickActiveLicense(auth.licenses)) {
     return auth;
+  }
+
+  // Pre-check: if this machine already used trial, give clear error before trying
+  const trialStatus = await checkDeviceTrialStatus(authPath, spPath);
+  if (trialStatus && trialStatus.trial_used) {
+    const nextAuth = saveAuthState(authPath, {
+      ...auth,
+      lastError: 'Демо-период на этом устройстве уже был использован. Пожалуйста, приобретите подписку.',
+      lastCheckedAt: new Date().toISOString(),
+    });
+    const err = new Error('Демо-период на этом устройстве уже был использован. Пожалуйста, приобретите подписку.');
+    err.auth = nextAuth;
+    err.trialUsed = true;
+    throw err;
   }
 
   try {

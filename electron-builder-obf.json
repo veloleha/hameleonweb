@@ -1,0 +1,47 @@
+{
+  "appId": "com.hameleonweb.app",
+  "productName": "HAMELEONWEB",
+  "files": [
+    "src-obf/**/*",
+    "node_modules/@ffmpeg-installer/**/*",
+    "node_modules/node-machine-id/**/*",
+    "hameleonweb.png",
+    "hameleonweb.svg",
+    "hameleonweb.ico",
+    "package.json"
+  ],
+  "extraMetadata": {
+    "main": "src-obf/main/main.js"
+  },
+  "asar": true,
+  "asarUnpack": [
+    "**/node_modules/@ffmpeg-installer/**/*",
+    "**/node_modules/node-machine-id/**/*",
+    "**/*.exe",
+    "**/*.dll"
+  ],
+  "win": {
+    "target": [
+      { "target": "nsis", "arch": ["x64"] },
+      { "target": "portable", "arch": ["x64"] }
+    ],
+    "icon": "hameleonweb.ico"
+  },
+  "portable": {
+    "artifactName": "HAMELEONWEB-Portable-${version}.exe"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": true,
+    "allowElevation": true,
+    "allowToChangeInstallationDirectory": true,
+    "installerIcon": "hameleonweb.ico",
+    "uninstallerIcon": "hameleonweb.ico",
+    "installerHeaderIcon": "hameleonweb.ico",
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "HAMELEONWEB",
+    "artifactName": "HAMELEONWEB-Setup-${version}.exe",
+    "include": "installer.nsh"
+  }
+}

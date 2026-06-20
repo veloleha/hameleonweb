@@ -1,5 +1,6 @@
 node_modules/
 dist/
+src-obf/
 tmp-userdata/
 *.log
 .DS_Store
