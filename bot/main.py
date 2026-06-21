@@ -28,11 +28,11 @@ ADMIN_ID = int(os.getenv("TELEGRAM_ADMIN_ID", "0"))
 API_URL = os.getenv("API_URL", "http://127.0.0.1:8000").rstrip("/")
 NOWPAYMENTS_API_KEY = os.getenv("NOWPAYMENTS_API_KEY", "")
 JWT_SECRET = os.getenv("JWT_SECRET", "change_me")
-BASE_DIR = Path(__file__).resolve().parents[2]
+BASE_DIR = Path(__file__).resolve().parent
 TARIFFS_PATH = Path(
     os.getenv(
         "TARIFFS_PATH",
-        str(BASE_DIR / "whatsapp-manager-backup-2026-06-11_23-29-19" / "сайт" / "public" / "tariffs.json"),
+        str(BASE_DIR / "tariffs.json"),
     )
 )
 
