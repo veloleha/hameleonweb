@@ -1266,9 +1266,32 @@ async def admin_get_devices(client_id: int, db: AsyncSession = Depends(get_db)):
             "last_seen": d.last_seen.isoformat() if d.last_seen else None,
             "first_login": d.first_login.isoformat() if d.first_login else None,
             "is_active": d.is_active,
+            "license_id": d.license_id,
         }
         for d in devices
     ]
+
+
+@app.post("/api/admin/unbind-device")
+async def admin_unbind_device(request: Request, db: AsyncSession = Depends(get_db)):
+    """Unbind a device from its license slot (called by bot). Frees the slot for another device."""
+    body = await request.json()
+    if body.get("secret") != JWT_SECRET:
+        raise HTTPException(403, "Forbidden")
+
+    device_id = body.get("device_id")
+    client_id = int(body.get("client_id", 0))
+
+    result = await db.execute(
+        select(Device).where(Device.device_id == device_id, Device.client_id == client_id)
+    )
+    device = result.scalar_one_or_none()
+    if not device:
+        raise HTTPException(404, "Device not found")
+
+    device.license_id = None
+    await db.commit()
+    return {"ok": True, "device_id": device_id}
 
 # ============ PUBLIC ENDPOINTS ============
 

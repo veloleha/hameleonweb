@@ -728,34 +728,133 @@ async def menu_orders(callback: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[{"text": "◀️ Назад", "callback_data": "nav:menu"}]])
     await callback.message.edit_text("💳 <b>История покупок</b>\n\nПока пусто.", reply_markup=keyboard)
 
+async def get_client_id(tg_id: int, username: str, first_name: str, last_name: str) -> int:
+    data = await api_post('/api/clients/upsert', {
+        'telegram_id': tg_id,
+        'username': username or '',
+        'first_name': first_name,
+        'last_name': last_name,
+    })
+    return data.get('client_id')
+
+
+async def show_devices(target, client_id: int):
+    """Show device list with unbind buttons. target = Message or CallbackQuery."""
+    text = "📱 <b>Привязанные устройства:</b>\n\n"
+    keyboard_rows = []
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as hc:
+            resp = await hc.get(f"{API_URL}/api/admin/devices/{client_id}")
+            devices = resp.json() if resp.status_code == 200 else []
+
+        if not devices:
+            text += "Нет зарегистрированных устройств.\n\nУстройство появляется автоматически при первом входе в приложение HAMELEONWEB."
+        else:
+            for i, dev in enumerate(devices, 1):
+                name = dev.get('device_name') or dev.get('device_id', '—')
+                dev_id = dev.get('device_id', '')
+                last = str(dev.get('last_seen') or '—')[:16]
+                bound = "🔗 привязана" if dev.get('license_id') else "⛓️ не привязана"
+                text += f"<b>{i}. {name}</b>\n"
+                text += f"   Лицензия: {bound}\n"
+                text += f"   Последний вход: {last}\n\n"
+                if dev.get('license_id'):
+                    keyboard_rows.append([InlineKeyboardButton(
+                        text=f"🔓 Отвязать {name[:25]}",
+                        callback_data=f"unbind:{client_id}:{dev_id}"
+                    )])
+    except Exception as exc:
+        text += f"Ошибка загрузки: {exc}\n"
+
+    keyboard_rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="menu:devices")])
+    keyboard_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="nav:menu")])
+    kb = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
+
+    if hasattr(target, 'message'):
+        await target.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await target.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
 @router.callback_query(F.data == "menu:devices")
 async def menu_devices(callback: CallbackQuery):
     await safe_callback_answer(callback)
     tg_id = callback.from_user.id
-
-    text = "📱 <b>Привязанные устройства:</b>\n\n"
     try:
-        data = await api_post('/api/clients/upsert', {
-            'telegram_id': tg_id,
-            'username': callback.from_user.username or '',
-            'first_name': callback.from_user.first_name,
-            'last_name': callback.from_user.last_name,
-        })
-        client_id = data.get('client_id')
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{API_URL}/api/admin/devices/{client_id}")
-            devices = resp.json() if resp.status_code == 200 else []
-        if not devices:
-            text += "Нет привязанных устройств.\n\nУстройство привязывается автоматически при первом входе в приложение HAMELEONWEB."
-        for dev in devices:
-            text += f"💻 <b>{dev.get('device_name', '—')}</b>\n"
-            text += f"   ID: <code>{dev.get('device_id', '—')}</code>\n"
-            text += f"   Последний вход: {str(dev.get('last_seen', '—'))[:16]}\n\n"
+        client_id = await get_client_id(
+            tg_id,
+            callback.from_user.username or '',
+            callback.from_user.first_name,
+            callback.from_user.last_name,
+        )
+        await show_devices(callback, client_id)
     except Exception as exc:
-        text += f"Ошибка загрузки: {exc}\n"
+        await callback.message.edit_text(
+            f"❌ Ошибка: {exc}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[{"text": "◀️ Назад", "callback_data": "nav:menu"}]])
+        )
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[{"text": "◀️ Назад", "callback_data": "nav:menu"}]])
-    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+
+@router.callback_query(F.data.startswith("unbind:"))
+async def unbind_confirm(callback: CallbackQuery):
+    await safe_callback_answer(callback)
+    # unbind:<client_id>:<device_id>
+    parts = callback.data.split(":", 2)
+    if len(parts) < 3:
+        return
+    client_id_str, device_id = parts[1], parts[2]
+    name_short = device_id[:30]
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Да, отвязать", callback_data=f"unbind_ok:{client_id_str}:{device_id}"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="menu:devices"),
+        ]
+    ])
+    await callback.message.edit_text(
+        f"⚠️ <b>Отвязать устройство?</b>\n\n"
+        f"<code>{name_short}</code>\n\n"
+        f"Лицензия будет освобождена. Устройство перестанет работать до следующего входа в приложение "
+        f"(если есть свободный слот — привяжется автоматически).",
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data.startswith("unbind_ok:"))
+async def unbind_execute(callback: CallbackQuery):
+    await safe_callback_answer(callback)
+    parts = callback.data.split(":", 2)
+    if len(parts) < 3:
+        return
+    client_id_str, device_id = parts[1], parts[2]
+    client_id = int(client_id_str)
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as hc:
+            r = await hc.post(f"{API_URL}/api/admin/unbind-device", json={
+                "secret": JWT_SECRET,
+                "client_id": client_id,
+                "device_id": device_id,
+            })
+        if r.status_code == 200:
+            await callback.message.edit_text(
+                f"✅ <b>Устройство отвязано.</b>\n\n"
+                f"<code>{device_id[:40]}</code>\n\n"
+                f"Лицензия освобождена. При следующем запуске приложения устройство получит свободный слот.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="📱 Устройства", callback_data="menu:devices")],
+                    [InlineKeyboardButton(text="◀️ Меню", callback_data="nav:menu")],
+                ]),
+                parse_mode="HTML"
+            )
+        else:
+            raise Exception(f"HTTP {r.status_code}: {r.text}")
+    except Exception as exc:
+        await callback.message.edit_text(
+            f"❌ Ошибка при отвязке: {exc}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="menu:devices")]])
+        )
 
 @router.callback_query(F.data == "menu:trial")
 async def menu_trial(callback: CallbackQuery):
