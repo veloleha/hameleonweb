@@ -132,6 +132,7 @@ class Device(Base):
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
     device_id = Column(String(200), unique=True, nullable=False)
     device_name = Column(String(200))
+    license_id = Column(Integer, ForeignKey("licenses.id"), nullable=True)
     first_login = Column(DateTime, default=datetime.utcnow)
     last_seen = Column(DateTime, default=datetime.utcnow)
     is_active = Column(Boolean, default=True)
@@ -199,6 +200,16 @@ async def lifespan(app: FastAPI):
     """Initialize database and seed default packages"""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Migration: add license_id column to devices if missing
+        try:
+            await conn.execute(
+                __import__('sqlalchemy').text(
+                    "ALTER TABLE devices ADD COLUMN license_id INTEGER REFERENCES licenses(id)"
+                )
+            )
+            print("✅ Migration: devices.license_id added")
+        except Exception:
+            pass  # column already exists
     
     # Seed default packages
     async with async_session() as session:
@@ -521,29 +532,94 @@ async def refresh_token(credentials: HTTPAuthorizationCredentials = Depends(secu
 
 @app.get("/api/license/my", response_model=List[LicenseResponse])
 async def get_my_licenses(payload: dict = Depends(verify_token), db: AsyncSession = Depends(get_db)):
-    """Get all licenses for current user"""
+    """Get licenses bound to the current device"""
     client_id = payload.get("client_id")
-    
+    device_id = payload.get("device_id")
+
+    # Find device and its bound license
+    dev_result = await db.execute(
+        select(Device).where(Device.device_id == device_id, Device.client_id == client_id)
+    )
+    device = dev_result.scalar_one_or_none()
+
+    if not device or not device.license_id:
+        return []
+
     result = await db.execute(
         select(License, Package).join(Package, License.package_id == Package.id, isouter=True)
-        .where(License.client_id == client_id)
-        .order_by(License.activated_at.desc())
+        .where(License.id == device.license_id)
     )
-    
-    licenses = []
-    for row in result.all():
-        license_obj = row.License
-        package = row.Package
-        
-        licenses.append(LicenseResponse(
-            license_key=license_obj.license_key,
-            expires_at=license_obj.expires_at,
-            status=license_obj.status,
-            max_devices=package.max_devices if package else 1,
-            max_accounts=package.max_accounts if package else 1
-        ))
-    
-    return licenses
+    row = result.first()
+    if not row:
+        return []
+
+    lic = row.License
+    pkg = row.Package
+    return [LicenseResponse(
+        license_key=lic.license_key,
+        expires_at=lic.expires_at,
+        status=lic.status,
+        max_devices=pkg.max_devices if pkg else 1,
+        max_accounts=pkg.max_accounts if pkg else 1
+    )]
+
+
+@app.post("/api/license/activate-device")
+async def activate_device_license(payload: dict = Depends(verify_token), db: AsyncSession = Depends(get_db)):
+    """Bind current device to a free license slot. Called automatically on every login."""
+    client_id = payload.get("client_id")
+    device_id = payload.get("device_id")
+
+    if not device_id:
+        raise HTTPException(400, "No device_id in token")
+
+    # Find device record
+    dev_result = await db.execute(select(Device).where(Device.device_id == device_id))
+    device = dev_result.scalar_one_or_none()
+    if not device:
+        raise HTTPException(404, "Device not registered")
+
+    # If already bound to a still-valid license — just refresh last_seen
+    if device.license_id:
+        lic_result = await db.execute(select(License).where(License.id == device.license_id))
+        existing = lic_result.scalar_one_or_none()
+        if existing and existing.status in ("active", "trial") and (
+            not existing.expires_at or existing.expires_at > datetime.utcnow()
+        ):
+            device.last_seen = datetime.utcnow()
+            await db.commit()
+            return {"ok": True, "license_key": existing.license_key, "status": "already_bound"}
+        else:
+            # Bound license expired or revoked — release the slot
+            device.license_id = None
+
+    # Find all active licenses for this client and try to grab a free slot
+    lic_rows = await db.execute(
+        select(License, Package).join(Package, License.package_id == Package.id, isouter=True)
+        .where(
+            License.client_id == client_id,
+            License.status.in_(["active", "trial"]),
+        )
+        .order_by(License.activated_at.asc())
+    )
+    for row in lic_rows.all():
+        lic = row.License
+        pkg = row.Package
+        # Skip expired
+        if lic.expires_at and lic.expires_at < datetime.utcnow():
+            continue
+        max_dev = pkg.max_devices if pkg else 1
+        # Count devices currently bound to this license
+        used = (await db.execute(
+            select(func.count(Device.id)).where(Device.license_id == lic.id)
+        )).scalar() or 0
+        if used < max_dev:
+            device.license_id = lic.id
+            device.last_seen = datetime.utcnow()
+            await db.commit()
+            return {"ok": True, "license_key": lic.license_key, "status": "bound"}
+
+    raise HTTPException(403, "No available license slots. All slots are occupied by other devices.")
 
 @app.get("/api/license/verify")
 async def verify_license(
