@@ -436,10 +436,18 @@ async function refreshLicensesFromApi(authPath, settingsPath) {
     throw new Error('Not authenticated');
   }
 
-  const headers = { Authorization: `Bearer ${auth.accessToken}` };
+  let currentToken = auth.accessToken;
+  const headers = { Authorization: `Bearer ${currentToken}` };
   let licenses;
 
   try {
+    // First activate-device so the server binds this device to a license slot
+    try {
+      await apiJson(spPath, '/api/license/activate-device', { method: 'POST', headers });
+    } catch (activateErr) {
+      // 403 = no free slots (handled later via empty license list)
+      // 404 = device not registered yet (first auth cycle, ignore)
+    }
     licenses = await apiJson(spPath, '/api/license/my', { method: 'GET', headers });
   } catch (error) {
     if (error && error.status === 401 && auth.refreshToken) {
@@ -456,9 +464,16 @@ async function refreshLicensesFromApi(authPath, settingsPath) {
         tokenAcquiredAt: new Date().toISOString(),
       });
 
+      currentToken = nextAuth.accessToken;
+      const refreshedHeaders = { Authorization: `Bearer ${currentToken}` };
+
+      try {
+        await apiJson(spPath, '/api/license/activate-device', { method: 'POST', headers: refreshedHeaders });
+      } catch (_) {}
+
       licenses = await apiJson(spPath, '/api/license/my', {
         method: 'GET',
-        headers: { Authorization: `Bearer ${nextAuth.accessToken}` },
+        headers: refreshedHeaders,
       });
     } else {
       throw error;
