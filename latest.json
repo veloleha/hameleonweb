@@ -1,5 +1,5 @@
 {
-  "version": "0.2.1",
-  "file": "HAMELEONWEB-Setup-0.2.1.exe",
-  "notes": "Recording indicator with timer, update download fix"
+  "version": "0.2.2",
+  "file": "HAMELEONWEB-Setup-0.2.2.exe",
+  "notes": "Device-bound license protection: one license slot per device"
 }
