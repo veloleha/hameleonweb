@@ -1,5 +1,5 @@
 {
-  "version": "0.2.2",
-  "file": "HAMELEONWEB-Setup-0.2.2.exe",
-  "notes": "Device-bound license protection: one license slot per device"
+  "version": "0.2.3",
+  "file": "HAMELEONWEB-Setup-0.2.3.exe",
+  "notes": "Auto license upgrade: trial switches to paid automatically every hour"
 }

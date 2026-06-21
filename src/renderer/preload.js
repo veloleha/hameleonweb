@@ -46,4 +46,9 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('rec:stopped', handler);
     return () => ipcRenderer.removeListener('rec:stopped', handler);
   },
+  onAuthUpdated: (cb) => {
+    const handler = (_e, data) => cb(data);
+    ipcRenderer.on('auth:updated', handler);
+    return () => ipcRenderer.removeListener('auth:updated', handler);
+  },
 });

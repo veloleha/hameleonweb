@@ -1210,6 +1210,14 @@ async function init() {
   }
 
   await bindSettings();
+
+  // Listen for hourly license refresh from main process
+  if (window.api.onAuthUpdated) {
+    window.api.onAuthUpdated(async () => {
+      await refreshAccounts();
+      await ensureAuthVisibleIfNeeded();
+    });
+  }
 }
 
 function initResizableSidebar() {

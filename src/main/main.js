@@ -1186,6 +1186,18 @@ app.whenReady().then(() => {
     createAccount(userDataPath);
   }
 
+  // Hourly license refresh — picks up paid license if user was on trial
+  const LICENSE_CHECK_INTERVAL = 60 * 60 * 1000; // 1 hour
+  setInterval(async () => {
+    const auth = loadAuthState(sharedDataPath);
+    if (!auth.accessToken) return;
+    try {
+      const nextAuth = await refreshLicensesFromApi(sharedDataPath, userDataPath);
+      const win = BrowserWindow.getAllWindows()[0];
+      if (win) win.webContents.send('auth:updated', nextAuth);
+    } catch (_) {}
+  }, LICENSE_CHECK_INTERVAL);
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
   });
