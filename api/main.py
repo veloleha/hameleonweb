@@ -579,45 +579,65 @@ async def activate_device_license(payload: dict = Depends(verify_token), db: Asy
     if not device:
         raise HTTPException(404, "Device not registered")
 
-    # If already bound to a still-valid license — just refresh last_seen
+    # If already bound to a license — check if we should upgrade from trial to paid
     if device.license_id:
         lic_result = await db.execute(select(License).where(License.id == device.license_id))
         existing = lic_result.scalar_one_or_none()
-        if existing and existing.status in ("active", "trial") and (
+        bound_valid = existing and existing.status in ("active", "trial") and (
             not existing.expires_at or existing.expires_at > datetime.utcnow()
-        ):
-            device.last_seen = datetime.utcnow()
-            await db.commit()
-            return {"ok": True, "license_key": existing.license_key, "status": "already_bound"}
+        )
+        if bound_valid:
+            if existing.status == "active":
+                # Already on paid license — just update last_seen
+                device.last_seen = datetime.utcnow()
+                await db.commit()
+                return {"ok": True, "license_key": existing.license_key, "status": "already_bound"}
+            else:
+                # On trial — check if paid active license is now available for this client
+                paid_count = (await db.execute(
+                    select(func.count(License.id)).where(
+                        License.client_id == client_id,
+                        License.status == "active",
+                        License.expires_at > datetime.utcnow(),
+                    )
+                )).scalar() or 0
+                if paid_count == 0:
+                    # No paid license yet — stay on trial
+                    device.last_seen = datetime.utcnow()
+                    await db.commit()
+                    return {"ok": True, "license_key": existing.license_key, "status": "already_bound"}
+                # Paid license appeared — release trial slot and fall through to grab paid slot
+                device.license_id = None
         else:
             # Bound license expired or revoked — release the slot
             device.license_id = None
 
-    # Find all active licenses for this client and try to grab a free slot
-    lic_rows = await db.execute(
-        select(License, Package).join(Package, License.package_id == Package.id, isouter=True)
-        .where(
-            License.client_id == client_id,
-            License.status.in_(["active", "trial"]),
+    # Find a free slot — prioritize paid (active) licenses over trial
+    for priority_status in [["active"], ["trial"]]:
+        lic_rows = await db.execute(
+            select(License, Package).join(Package, License.package_id == Package.id, isouter=True)
+            .where(
+                License.client_id == client_id,
+                License.status.in_(priority_status),
+            )
+            .order_by(License.activated_at.asc())
         )
-        .order_by(License.activated_at.asc())
-    )
-    for row in lic_rows.all():
-        lic = row.License
-        pkg = row.Package
-        # Skip expired
-        if lic.expires_at and lic.expires_at < datetime.utcnow():
-            continue
-        max_dev = pkg.max_devices if pkg else 1
-        # Count devices currently bound to this license
-        used = (await db.execute(
-            select(func.count(Device.id)).where(Device.license_id == lic.id)
-        )).scalar() or 0
-        if used < max_dev:
-            device.license_id = lic.id
-            device.last_seen = datetime.utcnow()
-            await db.commit()
-            return {"ok": True, "license_key": lic.license_key, "status": "bound"}
+        for row in lic_rows.all():
+            lic = row.License
+            pkg = row.Package
+            # Skip expired
+            if lic.expires_at and lic.expires_at < datetime.utcnow():
+                continue
+            max_dev = pkg.max_devices if pkg else 1
+            # Count devices currently bound to this license
+            used = (await db.execute(
+                select(func.count(Device.id)).where(Device.license_id == lic.id)
+            )).scalar() or 0
+            if used < max_dev:
+                device.license_id = lic.id
+                device.last_seen = datetime.utcnow()
+                await db.commit()
+                return {"ok": True, "license_key": lic.license_key, "status": "bound"}
 
     raise HTTPException(403, "No available license slots. All slots are occupied by other devices.")
 
@@ -1130,21 +1150,48 @@ async def auto_renew_licenses():
 
 @app.post("/api/admin/issue-license")
 async def admin_issue_license(request: Request, db: AsyncSession = Depends(get_db)):
-    """Issue or extend a license for a client after confirmed payment (called by bot)"""
+    """Issue licenses for a client after confirmed payment (called by bot).
+    quantity > 1 creates that many separate license records (one per device slot).
+    quantity == 1 extends existing active license if present, or creates new one."""
     body = await request.json()
     if body.get("secret") != JWT_SECRET:
         raise HTTPException(403, "Forbidden")
 
     client_id = int(body.get("client_id", 0))
     days = int(body.get("days", 30))
-    invoice_id = body.get("invoice_id", "")
-
-    # Check if client has an existing active license — extend it
+    quantity = int(body.get("quantity", 1))
+    package_id = body.get("package_id")
     now = datetime.utcnow()
+    expires_at = now + timedelta(days=days)
+
+    # quantity > 1: always create N separate license records (one slot per device)
+    if quantity > 1:
+        created = []
+        for _ in range(quantity):
+            lic = License(
+                client_id=client_id,
+                license_key=generate_license_key(),
+                activated_at=now,
+                expires_at=expires_at,
+                status="active",
+                trial_used=False,
+                package_id=package_id,
+            )
+            db.add(lic)
+            created.append(lic)
+        await db.flush()
+        await db.commit()
+        return {
+            "created": quantity,
+            "licenses": [l.license_key for l in created],
+            "expires_at": expires_at.isoformat(),
+        }
+
+    # quantity == 1: extend existing active license if present
     result = await db.execute(
         select(License).where(
             License.client_id == client_id,
-            License.status.in_(["active", "trial"]),
+            License.status == "active",
             License.expires_at > now,
         ).order_by(License.expires_at.desc())
     )
@@ -1152,7 +1199,6 @@ async def admin_issue_license(request: Request, db: AsyncSession = Depends(get_d
 
     if existing:
         existing.expires_at = existing.expires_at + timedelta(days=days)
-        existing.status = "active"
         await db.commit()
         return {
             "license_key": existing.license_key,
@@ -1165,9 +1211,10 @@ async def admin_issue_license(request: Request, db: AsyncSession = Depends(get_d
         client_id=client_id,
         license_key=generate_license_key(),
         activated_at=now,
-        expires_at=now + timedelta(days=days),
+        expires_at=expires_at,
         status="active",
         trial_used=False,
+        package_id=package_id,
     )
     db.add(license)
     await db.commit()
