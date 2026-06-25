@@ -1031,6 +1031,9 @@ function registerIpc(userDataPath, recorder, sharedDataPath) {
 
       // Останавливаем предыдущий суфлёр, если есть
       cleanupSufler(accountId);
+      try {
+        await v.webContents.executeJavaScript('if(window.__waMgrStopSufler) window.__waMgrStopSufler();', true);
+      } catch (e) {}
 
       const roomId = generateRoomId();
       suflerRoomsByAccountId.set(accountId, roomId);

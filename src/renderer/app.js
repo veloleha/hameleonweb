@@ -2644,8 +2644,18 @@ function initSufler() {
     if (statusEl) statusEl.textContent = text;
   }
 
+  function resetButtons() {
+    btnStart.disabled = false;
+    btnStop.disabled = false;
+  }
+
   function showPanel(accountId) {
     currentAccountId = accountId;
+    active = false;
+    urlRow.classList.add('hidden');
+    btnStart.classList.remove('hidden');
+    btnStop.classList.add('hidden');
+    resetButtons();
     panel.classList.remove('hidden');
   }
 
@@ -2656,10 +2666,11 @@ function initSufler() {
     btnStop.classList.add('hidden');
     active = false;
     currentAccountId = null;
+    resetButtons();
   }
 
   btnStart.addEventListener('click', async () => {
-    if (!currentAccountId) return;
+    if (!currentAccountId || active || btnStart.disabled) return;
     btnStart.disabled = true;
     setStatus('Запуск...');
     const res = await window.api.startSufler(currentAccountId);
@@ -2669,6 +2680,7 @@ function initSufler() {
       urlRow.classList.remove('hidden');
       btnStart.classList.add('hidden');
       btnStop.classList.remove('hidden');
+      resetButtons();
       setStatus('Суфлёр активен. Отправьте ссылку оператору.');
     } else {
       setStatus('Ошибка: ' + (res && res.error || 'unknown'));
@@ -2677,7 +2689,7 @@ function initSufler() {
   });
 
   btnStop.addEventListener('click', async () => {
-    if (!currentAccountId) return;
+    if (!currentAccountId || !active || btnStop.disabled) return;
     btnStop.disabled = true;
     setStatus('Остановка...');
     await window.api.stopSufler(currentAccountId);
@@ -2685,8 +2697,7 @@ function initSufler() {
     urlRow.classList.add('hidden');
     btnStart.classList.remove('hidden');
     btnStop.classList.add('hidden');
-    btnStart.disabled = false;
-    btnStop.disabled = false;
+    resetButtons();
     setStatus('Суфлёр выключен.');
   });
 
