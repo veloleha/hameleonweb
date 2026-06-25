@@ -312,7 +312,7 @@
         recCtx.resume().catch(function() {});
       }
       suflerRelaySendSource = recCtx.createMediaStreamSource(recDest.stream);
-      suflerRelaySendNode = recCtx.createScriptProcessor(4096, 1, 1);
+      suflerRelaySendNode = recCtx.createScriptProcessor(1024, 1, 1);
       suflerRelaySendGain = recCtx.createGain();
       suflerRelaySendGain.gain.value = 0;
       suflerRelaySendSource.connect(suflerRelaySendNode);
@@ -344,7 +344,7 @@
       if (suflerRelayPlayCtx.state === 'suspended') {
         suflerRelayPlayCtx.resume().catch(function() {});
       }
-      suflerRelayPlayNode = suflerRelayPlayCtx.createScriptProcessor(4096, 0, 1);
+      suflerRelayPlayNode = suflerRelayPlayCtx.createScriptProcessor(1024, 0, 1);
       suflerRelayPlayNode.onaudioprocess = function(ev) {
         try {
           var out = ev.outputBuffer.getChannelData(0);
@@ -375,12 +375,25 @@
     }
   }
 
+  function queuedSuflerSampleCount() {
+    var total = 0;
+    for (var i = 0; i < suflerRelayPlayQueue.length; i++) total += suflerRelayPlayQueue[i].length;
+    return total - suflerRelayPlayOffset;
+  }
+
   function queueSuflerRelayAudio(base64) {
     var samples = base64ToFloat32(base64);
     if (!samples || !samples.length) return;
     var rms = rmsOfFloat32(samples);
     suflerPost({msg:'relay recv rms=' + rms.toFixed(4) + ' samples=' + samples.length});
     suflerRelayPlayQueue.push(samples);
+    // Не даём очереди расти больше ~120 мс, иначе задержка накапливается.
+    var sr = (suflerRelayPlayCtx && suflerRelayPlayCtx.sampleRate) || 48000;
+    var maxQueued = Math.floor(sr * 0.12);
+    while (queuedSuflerSampleCount() > maxQueued && suflerRelayPlayQueue.length > 1) {
+      suflerRelayPlayQueue.shift();
+      suflerRelayPlayOffset = 0;
+    }
   }
 
   function addSuflerStreamToPC(stream, label) {

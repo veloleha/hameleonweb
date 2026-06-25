@@ -6,6 +6,7 @@ const DEFAULT_AUTH_STATE = {
   telegramId: null,
   deviceId: '',
   deviceName: '',
+  deviceType: '',
   accessToken: '',
   refreshToken: '',
   tokenExpiresIn: 0,
