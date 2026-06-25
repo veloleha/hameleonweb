@@ -29,6 +29,7 @@
       "node_modules/@ffmpeg-installer/**/*",
       "node_modules/node-machine-id/**/*",
       "node_modules/ws/**/*",
+      "!node_modules/leaderboard-server/**/*",
       "hameleonweb.png",
       "hameleonweb.svg",
       "hameleonweb.ico",
