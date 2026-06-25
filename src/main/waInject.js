@@ -142,20 +142,18 @@
   };
 
   // WebRTC голосовой суфлёр (отдельный аудиовыход)
-  var suflerWS = null;
+  // Сигналинг теперь идёт через main process, чтобы обойти CSP в вебвью WhatsApp Web.
   var suflerPC = null;
   var suflerRemoteAudio = null;
   var suflerIceQueue = [];
-
-  function suflerEndpoint(roomId) {
-    // Webview loaded from web.whatsapp.com, so host is wrong; use hardcoded API domain
-    return 'wss://hameleonweb.xyz/ws/sufler/' + encodeURIComponent(roomId);
-  }
+  var suflerRoomId = null;
 
   function suflerPost(obj) { post(Object.assign({__waMgr:true, type:'sufler-debug'}, obj)); }
+  function suflerSignal(obj) { post(Object.assign({__waMgr:true, type:'sufler-signal'}, obj)); }
 
   function createSuflerPC() {
     if (suflerPC) { try { suflerPC.close(); } catch(e) {} }
+    suflerIceQueue = [];
     suflerPC = new RTCPeerConnection({
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -168,11 +166,13 @@
       recDest.stream.getAudioTracks().forEach(function(track) {
         try { suflerPC.addTrack(track, recDest.stream); } catch(e) {}
       });
+    } else {
+      suflerPost({msg:'no recDest stream'});
     }
 
     suflerPC.onicecandidate = function(ev) {
-      if (ev.candidate && suflerWS && suflerWS.readyState === 1) {
-        suflerWS.send(JSON.stringify({type: 'ice-candidate', payload: ev.candidate.toJSON()}));
+      if (ev.candidate) {
+        suflerSignal({type: 'ice-candidate', payload: ev.candidate.toJSON()});
       }
     };
 
@@ -184,7 +184,6 @@
         document.body.appendChild(suflerRemoteAudio);
       }
       suflerRemoteAudio.srcObject = ev.streams[0];
-      // Установка отдельного выхода, если поддерживается
       var sinkId = window.__waMgrSuflerSinkId;
       if (sinkId && typeof suflerRemoteAudio.setSinkId === 'function') {
         suflerRemoteAudio.setSinkId(sinkId).catch(function(e) {
@@ -197,56 +196,6 @@
     suflerPC.onconnectionstatechange = function() {
       suflerPost({msg:'pc state ' + suflerPC.connectionState});
     };
-  }
-
-  window.__waMgrStartSufler = function(roomId, sinkId) {
-    if (suflerWS) { suflerPost({msg:'already started'}); return; }
-    window.__waMgrSuflerSinkId = sinkId || null;
-
-    createSuflerPC();
-
-    var ws = new WebSocket(suflerEndpoint(roomId));
-    suflerWS = ws;
-
-    ws.onopen = function() {
-      ws.send(JSON.stringify({type: 'join', role: 'electron'}));
-      suflerPost({msg:'ws connected'});
-    };
-
-    ws.onclose = function() {
-      suflerPost({msg:'ws closed'});
-      window.__waMgrStopSufler();
-    };
-
-    ws.onerror = function(e) {
-      suflerPost({msg:'ws error ' + String(e)});
-    };
-
-    ws.onmessage = function(event) {
-      var msg = JSON.parse(event.data);
-      if (msg.type === 'peer-joined') {
-        // Оператор подключился — делаем offer
-        suflerPC.createOffer().then(function(offer) {
-          return suflerPC.setLocalDescription(offer);
-        }).then(function() {
-          ws.send(JSON.stringify({type: 'offer', payload: suflerPC.localDescription.toJSON()}));
-        }).catch(function(e) {
-          suflerPost({msg:'offer error ' + String(e)});
-        });
-      } else if (msg.type === 'answer') {
-        suflerPC.setRemoteDescription(new RTCSessionDescription(msg.payload)).catch(function(e) {
-          suflerPost({msg:'setRemote answer error ' + String(e)});
-        });
-      } else if (msg.type === 'ice-candidate') {
-        if (suflerPC.remoteDescription) {
-          suflerPC.addIceCandidate(new RTCIceCandidate(msg.payload)).catch(function(e) {
-            suflerPost({msg:'addIceCandidate error ' + String(e)});
-          });
-        } else {
-          suflerIceQueue.push(msg.payload);
-        }
-      }
-    };
 
     // Применяем отложенные ICE кандидаты после получения remote description
     var origSetRemote = suflerPC.setRemoteDescription.bind(suflerPC);
@@ -258,16 +207,52 @@
         }
       });
     };
+  }
+
+  window.__waMgrStartSufler = function(roomId, sinkId) {
+    if (suflerPC) { suflerPost({msg:'already started'}); return; }
+    window.__waMgrSuflerSinkId = sinkId || null;
+    suflerRoomId = roomId;
+    createSuflerPC();
+    suflerPost({msg:'pc created, waiting for peer'});
+  };
+
+  window.__waMgrApplySuflerSignal = function(msg) {
+    if (!suflerPC) {
+      suflerPost({msg:'apply signal but no pc'});
+      return;
+    }
+    if (msg.type === 'peer-joined') {
+      // Оператор подключился — делаем offer
+      suflerPC.createOffer().then(function(offer) {
+        return suflerPC.setLocalDescription(offer);
+      }).then(function() {
+        suflerSignal({type: 'offer', payload: suflerPC.localDescription.toJSON()});
+      }).catch(function(e) {
+        suflerPost({msg:'offer error ' + String(e)});
+      });
+    } else if (msg.type === 'answer') {
+      suflerPC.setRemoteDescription(new RTCSessionDescription(msg.payload)).catch(function(e) {
+        suflerPost({msg:'setRemote answer error ' + String(e)});
+      });
+    } else if (msg.type === 'ice-candidate') {
+      if (suflerPC.remoteDescription) {
+        suflerPC.addIceCandidate(new RTCIceCandidate(msg.payload)).catch(function(e) {
+          suflerPost({msg:'addIceCandidate error ' + String(e)});
+        });
+      } else {
+        suflerIceQueue.push(msg.payload);
+      }
+    }
   };
 
   window.__waMgrStopSufler = function() {
-    try { if (suflerWS) { suflerWS.close(); } } catch(e) {}
     try { if (suflerPC) { suflerPC.close(); } } catch(e) {}
     try { if (suflerRemoteAudio) { suflerRemoteAudio.remove(); } } catch(e) {}
-    suflerWS = null;
     suflerPC = null;
     suflerRemoteAudio = null;
     suflerIceQueue = [];
+    suflerRoomId = null;
     suflerPost({msg:'stopped'});
   };
 

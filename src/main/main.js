@@ -8,6 +8,7 @@ const { loadAccounts, createAccount, renameAccount, deleteAccount } = require('.
 const { loadSettings, saveSettings } = require('./settings');
 const { loadAuthState, saveAuthState, clearAuthState } = require('./auth');
 const { Recorder } = require('./recorder');
+const WebSocket = require('ws');
 
 const SIDEBAR_WIDTH = 280;
 const TOPBAR_HEIGHT = 0;
@@ -993,27 +994,83 @@ function registerIpc(userDataPath, recorder, sharedDataPath) {
 
   // WebRTC голосовой суфлёр
   const suflerRoomsByAccountId = new Map();
+  const suflerWsByAccountId = new Map();
   const SUFLER_BASE_URL = 'https://hameleonweb.xyz/sufler';
+  const SUFLER_WS_URL = 'wss://hameleonweb.xyz/ws/sufler';
 
   function generateRoomId() {
     try {
-      return require('crypto').randomUUID().replace(/-/g, '').slice(0, 16);
+      return crypto.randomUUID().replace(/-/g, '').slice(0, 16);
     } catch (e) {
       return Math.random().toString(36).slice(2) + Date.now().toString(36);
     }
+  }
+
+  function cleanupSufler(accountId) {
+    const ws = suflerWsByAccountId.get(accountId);
+    if (ws) {
+      try { ws.terminate(); } catch (e) {}
+      suflerWsByAccountId.delete(accountId);
+    }
+    suflerRoomsByAccountId.delete(accountId);
+  }
+
+  function applySignalToView(accountId, msg) {
+    const v = viewsByAccountId.get(accountId) || activeView;
+    if (!v || !v.webContents || v.webContents.isDestroyed()) return;
+    const code = `if(window.__waMgrApplySuflerSignal) window.__waMgrApplySuflerSignal(${JSON.stringify(msg)});`;
+    v.webContents.executeJavaScript(code, true).catch((e) => {
+      console.log('[sufler:apply-signal-error]', e && e.message);
+    });
   }
 
   ipcMain.handle('wa:startSufler', async (_e, { accountId, sinkId }) => {
     try {
       const v = viewsByAccountId.get(accountId) || activeView;
       if (!v || !v.webContents || v.webContents.isDestroyed()) return { ok: false, error: 'view-not-found' };
+
+      // Останавливаем предыдущий суфлёр, если есть
+      cleanupSufler(accountId);
+
       const roomId = generateRoomId();
       suflerRoomsByAccountId.set(accountId, roomId);
+
+      // Создаём WebSocket-соединение из main process (обход CSP в вебвью)
+      const ws = new WebSocket(`${SUFLER_WS_URL}/${roomId}`);
+      suflerWsByAccountId.set(accountId, ws);
+
+      ws.on('open', () => {
+        try { ws.send(JSON.stringify({ type: 'join', role: 'electron' })); } catch (e) {}
+        console.log('[sufler:ws-open]', { accountId, roomId });
+      });
+
+      ws.on('message', (data) => {
+        try {
+          const msg = JSON.parse(data.toString());
+          console.log('[sufler:ws-message]', { accountId, type: msg.type });
+          applySignalToView(accountId, msg);
+        } catch (e) {
+          console.log('[sufler:ws-message-error]', e && e.message);
+        }
+      });
+
+      ws.on('close', () => {
+        console.log('[sufler:ws-close]', { accountId });
+        cleanupSufler(accountId);
+      });
+
+      ws.on('error', (err) => {
+        console.log('[sufler:ws-error]', { accountId, err: err && err.message });
+      });
+
+      // Создаём PeerConnection в вебвью
       const code = `if(window.__waMgrStartSufler) window.__waMgrStartSufler(${JSON.stringify(roomId)}, ${JSON.stringify(sinkId || null)});`;
       await v.webContents.executeJavaScript(code, true);
+
       return { ok: true, roomId, url: `${SUFLER_BASE_URL}/${roomId}` };
     } catch (e) {
       console.log('[wa:startSufler:error]', e && e.message);
+      cleanupSufler(accountId);
       return { ok: false, error: (e && e.message) || String(e) };
     }
   });
@@ -1024,7 +1081,7 @@ function registerIpc(userDataPath, recorder, sharedDataPath) {
       if (v && v.webContents && !v.webContents.isDestroyed()) {
         await v.webContents.executeJavaScript('if(window.__waMgrStopSufler) window.__waMgrStopSufler();', true);
       }
-      suflerRoomsByAccountId.delete(accountId);
+      cleanupSufler(accountId);
       return { ok: true };
     } catch (e) {
       console.log('[wa:stopSufler:error]', e && e.message);
@@ -1044,10 +1101,23 @@ function registerIpc(userDataPath, recorder, sharedDataPath) {
     } catch (e) {}
   });
 
+  ipcMain.on('wa:sufler-signal', (_e, { accountId, type, payload }) => {
+    try {
+      const ws = suflerWsByAccountId.get(accountId);
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        console.log('[sufler:signal-no-ws]', { accountId, type });
+        return;
+      }
+      const msg = { type, payload };
+      ws.send(JSON.stringify(msg));
+      console.log('[sufler:signal-to-ws]', { accountId, type });
+    } catch (e) {
+      console.log('[sufler:signal-to-ws-error]', e && e.message);
+    }
+  });
+
   ipcMain.handle('wa:getAudioOutputDevices', async () => {
     try {
-      const devices = await require('electron').desktopCapturer.getSources({ types: [] });
-      // enumerateDevices доступен только в renderer; здесь вернём пустой список, renderer сам запросит
       return { ok: true, devices: [] };
     } catch (e) {
       return { ok: false, error: (e && e.message) || String(e) };

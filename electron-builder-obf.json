@@ -5,6 +5,7 @@
     "src-obf/**/*",
     "node_modules/@ffmpeg-installer/**/*",
     "node_modules/node-machine-id/**/*",
+    "node_modules/ws/**/*",
     "hameleonweb.png",
     "hameleonweb.svg",
     "hameleonweb.ico",
