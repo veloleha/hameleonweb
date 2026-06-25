@@ -156,11 +156,12 @@
         console.log('operator msg', msg);
 
         if (msg.type === 'peer-joined') {
-          setStatus('Спикер подключён', true);
-          await createOffer();
+          setStatus('Спикер подключён, ожидание аудио...', true);
+          // Спикер (Electron) создаёт offer, оператор только отвечает
         } else if (msg.type === 'peer-left') {
           setStatus('Спикер отключился', false);
         } else if (msg.type === 'offer') {
+          setStatus('Получен offer, создаём answer...', true);
           await handleOffer(msg.payload);
         } else if (msg.type === 'answer') {
           await pc.setRemoteDescription(new RTCSessionDescription(msg.payload));
