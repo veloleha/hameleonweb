@@ -100,6 +100,51 @@ body {
   border-top: 1px solid var(--border-color);
 }
 
+.sufler-panel {
+  margin-bottom: 12px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: rgba(99, 255, 127, 0.04);
+}
+
+.sufler-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.sufler-url-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.sufler-url-row .input {
+  flex: 1;
+  font-size: 11px;
+  padding: 6px 8px;
+}
+
+.sufler-url-row .btn {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+#suflerStatus {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+#btnStopSufler {
+  margin-top: 8px;
+  width: 100%;
+}
+
 .account {
   display: flex;
   align-items: center;

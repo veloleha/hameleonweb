@@ -211,6 +211,9 @@ function onMgrMessage(ev) {
     if (t === 'rec-debug') {
       try { ipcRenderer.send('wa:debug', { accountId, msg: '[injected] ' + String(d.msg || '') }); } catch(e) {}
     }
+    if (t === 'sufler-debug') {
+      try { ipcRenderer.send('wa:sufler-debug', { accountId, msg: String(d.msg || '') }); } catch(e) {}
+    }
   } catch (e) {}
 }
 

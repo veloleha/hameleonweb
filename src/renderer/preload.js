@@ -29,6 +29,11 @@ contextBridge.exposeInMainWorld('api', {
   resetCache: (id) => ipcRenderer.invoke('cache:resetAccount', { id }),
   openRecordingsFolder: () => ipcRenderer.invoke('recordings:openFolder'),
 
+  startSufler: (accountId, sinkId) => ipcRenderer.invoke('wa:startSufler', { accountId, sinkId }),
+  stopSufler: (accountId) => ipcRenderer.invoke('wa:stopSufler', { accountId }),
+  getSuflerUrl: (accountId) => ipcRenderer.invoke('wa:getSuflerUrl', { accountId }),
+  getAudioOutputDevices: () => ipcRenderer.invoke('wa:getAudioOutputDevices'),
+
   checkUpdate: () => ipcRenderer.invoke('app:checkUpdate'),
   installUpdate: (opts) => ipcRenderer.invoke('app:installUpdate', opts),
   onDownloadProgress: (cb) => {

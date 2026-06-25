@@ -31,6 +31,16 @@
             <span id="recLabel" class="rec-label">REC</span>
             <span id="recTimer" class="rec-timer">00:00</span>
           </div>
+          <div id="suflerPanel" class="sufler-panel hidden">
+            <div class="sufler-title">Голосовой суфлёр</div>
+            <button id="btnStartSufler" class="btn secondary">Включить суфлёр</button>
+            <div id="suflerUrlRow" class="sufler-url-row hidden">
+              <input id="suflerUrl" class="input" type="text" readonly />
+              <button id="btnCopySuflerUrl" class="btn secondary">Copy</button>
+            </div>
+            <button id="btnStopSufler" class="btn secondary hidden">Выключить суфлёр</button>
+            <div id="suflerStatus" class="hint"></div>
+          </div>
           <button id="btnAdd" class="btn">+ Add account</button>
         </div>
       </div>

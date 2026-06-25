@@ -337,6 +337,42 @@ function getApiBaseUrl(_userDataPath) {
   return PRODUCTION_API_URL;
 }
 
+function detectDeviceType() {
+  if (process.platform !== 'win32') return 'solo';
+  try {
+    const sessionName = (process.env.SESSIONNAME || '').toUpperCase();
+    const clientName = (process.env.CLIENTNAME || '').toUpperCase();
+    const computerName = (process.env.COMPUTERNAME || '').toUpperCase();
+
+    // Remote Desktop / RDS session
+    if (sessionName.startsWith('RDP-') || sessionName.startsWith('ICA-')) {
+      return 'rds';
+    }
+
+    // Citrix or other remote client
+    if (clientName && clientName !== 'CONSOLE' && clientName !== computerName) {
+      return 'rds';
+    }
+
+    // Multiple active sessions on this machine = shared terminal/RDS server
+    try {
+      const { execSync } = require('child_process');
+      const output = execSync('query session', { encoding: 'utf8', timeout: 3000 });
+      const activeCount = output
+        .split('\n')
+        .filter((line) => /\b(Active|Conn)\b/i.test(line))
+        .length;
+      if (activeCount > 1) {
+        return 'rds';
+      }
+    } catch (_) {}
+
+    return 'solo';
+  } catch (_) {
+    return 'solo';
+  }
+}
+
 function buildDeviceInfo(userDataPath) {
   const host = os.hostname() || 'desktop';
   const userName = process.env.USERNAME || process.env.USER || 'user';
@@ -369,7 +405,8 @@ function buildDeviceInfo(userDataPath) {
     .slice(0, 32);
 
   const deviceName = `${host} (${userName})`;
-  return { deviceId, deviceName };
+  const deviceType = detectDeviceType();
+  return { deviceId, deviceName, deviceType };
 }
 
 function isLicenseActive(license) {
@@ -431,13 +468,19 @@ async function apiJson(userDataPath, apiPath, options = {}) {
 
 async function refreshLicensesFromApi(authPath, settingsPath) {
   const spPath = settingsPath || authPath;
+  const device = buildDeviceInfo(spPath);
   const auth = loadAuthState(authPath);
   if (!auth.accessToken) {
     throw new Error('Not authenticated');
   }
 
   let currentToken = auth.accessToken;
-  const headers = { Authorization: `Bearer ${currentToken}` };
+  const headers = {
+    Authorization: `Bearer ${currentToken}`,
+    'X-Device-ID': device.deviceId,
+    'X-Device-Name': device.deviceName,
+    'X-Device-Type': device.deviceType,
+  };
   let licenses;
 
   try {
@@ -465,7 +508,12 @@ async function refreshLicensesFromApi(authPath, settingsPath) {
       });
 
       currentToken = nextAuth.accessToken;
-      const refreshedHeaders = { Authorization: `Bearer ${currentToken}` };
+      const refreshedHeaders = {
+        Authorization: `Bearer ${currentToken}`,
+        'X-Device-ID': device.deviceId,
+        'X-Device-Name': device.deviceName,
+        'X-Device-Type': device.deviceType,
+      };
 
       try {
         await apiJson(spPath, '/api/license/activate-device', { method: 'POST', headers: refreshedHeaders });
@@ -543,6 +591,8 @@ async function ensureActiveLicenseOrTrial(authPath, settingsPath) {
   if (trialStatus && trialStatus.trial_used) {
     const nextAuth = saveAuthState(authPath, {
       ...auth,
+      licenses: [],
+      activeLicenseKey: '',
       lastError: 'Демо-период на этом устройстве уже был использован. Пожалуйста, приобретите подписку.',
       lastCheckedAt: new Date().toISOString(),
     });
@@ -598,6 +648,7 @@ async function requestLoginCode(authPath, payload, settingsPath) {
       telegram_login: telegramLogin,
       device_id: device.deviceId,
       device_name: device.deviceName,
+      device_type: device.deviceType,
     }),
   });
 }
@@ -626,6 +677,7 @@ async function verifyLoginCode(authPath, payload, settingsPath) {
       code,
       device_id: device.deviceId,
       device_name: device.deviceName,
+      device_type: device.deviceType,
     }),
   });
 
@@ -634,6 +686,7 @@ async function verifyLoginCode(authPath, payload, settingsPath) {
     telegramLogin,
     deviceId: device.deviceId,
     deviceName: device.deviceName,
+    deviceType: device.deviceType,
     accessToken: tokens.access_token,
     refreshToken: tokens.refresh_token,
     tokenExpiresIn: tokens.expires_in,
@@ -936,6 +989,69 @@ function registerIpc(userDataPath, recorder, sharedDataPath) {
     try {
       recorder.stopTabRecording(accountId);
     } catch (e) {}
+  });
+
+  // WebRTC голосовой суфлёр
+  const suflerRoomsByAccountId = new Map();
+  const SUFLER_BASE_URL = 'https://hameleonweb.xyz/sufler';
+
+  function generateRoomId() {
+    try {
+      return require('crypto').randomUUID().replace(/-/g, '').slice(0, 16);
+    } catch (e) {
+      return Math.random().toString(36).slice(2) + Date.now().toString(36);
+    }
+  }
+
+  ipcMain.handle('wa:startSufler', async (_e, { accountId, sinkId }) => {
+    try {
+      const v = viewsByAccountId.get(accountId) || activeView;
+      if (!v || !v.webContents || v.webContents.isDestroyed()) return { ok: false, error: 'view-not-found' };
+      const roomId = generateRoomId();
+      suflerRoomsByAccountId.set(accountId, roomId);
+      const code = `if(window.__waMgrStartSufler) window.__waMgrStartSufler(${JSON.stringify(roomId)}, ${JSON.stringify(sinkId || null)});`;
+      await v.webContents.executeJavaScript(code, true);
+      return { ok: true, roomId, url: `${SUFLER_BASE_URL}/${roomId}` };
+    } catch (e) {
+      console.log('[wa:startSufler:error]', e && e.message);
+      return { ok: false, error: (e && e.message) || String(e) };
+    }
+  });
+
+  ipcMain.handle('wa:stopSufler', async (_e, { accountId }) => {
+    try {
+      const v = viewsByAccountId.get(accountId) || activeView;
+      if (v && v.webContents && !v.webContents.isDestroyed()) {
+        await v.webContents.executeJavaScript('if(window.__waMgrStopSufler) window.__waMgrStopSufler();', true);
+      }
+      suflerRoomsByAccountId.delete(accountId);
+      return { ok: true };
+    } catch (e) {
+      console.log('[wa:stopSufler:error]', e && e.message);
+      return { ok: false, error: (e && e.message) || String(e) };
+    }
+  });
+
+  ipcMain.handle('wa:getSuflerUrl', async (_e, { accountId }) => {
+    const roomId = suflerRoomsByAccountId.get(accountId);
+    if (!roomId) return { ok: false, error: 'no-active-sufler' };
+    return { ok: true, url: `${SUFLER_BASE_URL}/${roomId}` };
+  });
+
+  ipcMain.on('wa:sufler-debug', (_e, { accountId, msg }) => {
+    try {
+      console.log('[wa:sufler-debug]', { accountId, msg });
+    } catch (e) {}
+  });
+
+  ipcMain.handle('wa:getAudioOutputDevices', async () => {
+    try {
+      const devices = await require('electron').desktopCapturer.getSources({ types: [] });
+      // enumerateDevices доступен только в renderer; здесь вернём пустой список, renderer сам запросит
+      return { ok: true, devices: [] };
+    } catch (e) {
+      return { ok: false, error: (e && e.message) || String(e) };
+    }
   });
 
   ipcMain.handle('cache:resetAccount', async (_e, { id }) => {

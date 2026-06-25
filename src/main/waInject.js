@@ -140,4 +140,144 @@
   window.__waMgrStopRec = function() {
     try { if (mr && mr.state === 'recording') mr.stop(); } catch(e) {}
   };
+
+  // WebRTC голосовой суфлёр (отдельный аудиовыход)
+  var suflerWS = null;
+  var suflerPC = null;
+  var suflerRemoteAudio = null;
+  var suflerIceQueue = [];
+
+  function suflerEndpoint(roomId) {
+    // Webview loaded from web.whatsapp.com, so host is wrong; use hardcoded API domain
+    return 'wss://hameleonweb.xyz/ws/sufler/' + encodeURIComponent(roomId);
+  }
+
+  function suflerPost(obj) { post(Object.assign({__waMgr:true, type:'sufler-debug'}, obj)); }
+
+  function createSuflerPC() {
+    if (suflerPC) { try { suflerPC.close(); } catch(e) {} }
+    suflerPC = new RTCPeerConnection({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    });
+
+    // Отправляем смешанный аудиопоток (копия, запись не ломается)
+    if (recDest && recDest.stream) {
+      recDest.stream.getAudioTracks().forEach(function(track) {
+        try { suflerPC.addTrack(track, recDest.stream); } catch(e) {}
+      });
+    }
+
+    suflerPC.onicecandidate = function(ev) {
+      if (ev.candidate && suflerWS && suflerWS.readyState === 1) {
+        suflerWS.send(JSON.stringify({type: 'ice-candidate', payload: ev.candidate.toJSON()}));
+      }
+    };
+
+    suflerPC.ontrack = function(ev) {
+      if (!suflerRemoteAudio) {
+        suflerRemoteAudio = document.createElement('audio');
+        suflerRemoteAudio.autoplay = true;
+        suflerRemoteAudio.setAttribute('data-sufler', 'true');
+        document.body.appendChild(suflerRemoteAudio);
+      }
+      suflerRemoteAudio.srcObject = ev.streams[0];
+      // Установка отдельного выхода, если поддерживается
+      var sinkId = window.__waMgrSuflerSinkId;
+      if (sinkId && typeof suflerRemoteAudio.setSinkId === 'function') {
+        suflerRemoteAudio.setSinkId(sinkId).catch(function(e) {
+          suflerPost({msg:'setSinkId failed: ' + String(e)});
+        });
+      }
+      suflerPost({msg:'remote track received'});
+    };
+
+    suflerPC.onconnectionstatechange = function() {
+      suflerPost({msg:'pc state ' + suflerPC.connectionState});
+    };
+  }
+
+  window.__waMgrStartSufler = function(roomId, sinkId) {
+    if (suflerWS) { suflerPost({msg:'already started'}); return; }
+    window.__waMgrSuflerSinkId = sinkId || null;
+
+    createSuflerPC();
+
+    var ws = new WebSocket(suflerEndpoint(roomId));
+    suflerWS = ws;
+
+    ws.onopen = function() {
+      ws.send(JSON.stringify({type: 'join', role: 'electron'}));
+      suflerPost({msg:'ws connected'});
+    };
+
+    ws.onclose = function() {
+      suflerPost({msg:'ws closed'});
+      window.__waMgrStopSufler();
+    };
+
+    ws.onerror = function(e) {
+      suflerPost({msg:'ws error ' + String(e)});
+    };
+
+    ws.onmessage = function(event) {
+      var msg = JSON.parse(event.data);
+      if (msg.type === 'peer-joined') {
+        // Оператор подключился — делаем offer
+        suflerPC.createOffer().then(function(offer) {
+          return suflerPC.setLocalDescription(offer);
+        }).then(function() {
+          ws.send(JSON.stringify({type: 'offer', payload: suflerPC.localDescription.toJSON()}));
+        }).catch(function(e) {
+          suflerPost({msg:'offer error ' + String(e)});
+        });
+      } else if (msg.type === 'answer') {
+        suflerPC.setRemoteDescription(new RTCSessionDescription(msg.payload)).catch(function(e) {
+          suflerPost({msg:'setRemote answer error ' + String(e)});
+        });
+      } else if (msg.type === 'ice-candidate') {
+        if (suflerPC.remoteDescription) {
+          suflerPC.addIceCandidate(new RTCIceCandidate(msg.payload)).catch(function(e) {
+            suflerPost({msg:'addIceCandidate error ' + String(e)});
+          });
+        } else {
+          suflerIceQueue.push(msg.payload);
+        }
+      }
+    };
+
+    // Применяем отложенные ICE кандидаты после получения remote description
+    var origSetRemote = suflerPC.setRemoteDescription.bind(suflerPC);
+    suflerPC.setRemoteDescription = function(desc) {
+      return origSetRemote(desc).then(function() {
+        while (suflerIceQueue.length) {
+          var cand = suflerIceQueue.shift();
+          suflerPC.addIceCandidate(new RTCIceCandidate(cand)).catch(function(){});
+        }
+      });
+    };
+  };
+
+  window.__waMgrStopSufler = function() {
+    try { if (suflerWS) { suflerWS.close(); } } catch(e) {}
+    try { if (suflerPC) { suflerPC.close(); } } catch(e) {}
+    try { if (suflerRemoteAudio) { suflerRemoteAudio.remove(); } } catch(e) {}
+    suflerWS = null;
+    suflerPC = null;
+    suflerRemoteAudio = null;
+    suflerIceQueue = [];
+    suflerPost({msg:'stopped'});
+  };
+
+  window.__waMgrSetSuflerSink = function(sinkId) {
+    window.__waMgrSuflerSinkId = sinkId || null;
+    if (suflerRemoteAudio && typeof suflerRemoteAudio.setSinkId === 'function') {
+      suflerRemoteAudio.setSinkId(sinkId).catch(function(e) {
+        suflerPost({msg:'setSinkId failed: ' + String(e)});
+      });
+    }
+  };
+
 })();
