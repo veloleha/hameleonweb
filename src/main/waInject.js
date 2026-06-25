@@ -213,8 +213,19 @@
     if (suflerPC) { suflerPost({msg:'already started'}); return; }
     window.__waMgrSuflerSinkId = sinkId || null;
     suflerRoomId = roomId;
+
+    // Пытаемся активировать AudioContext, т.к. в вебвью он часто suspended до user gesture
+    if (recCtx && recCtx.state === 'suspended') {
+      recCtx.resume().then(function() {
+        suflerPost({msg:'audio context resumed'});
+      }).catch(function(e) {
+        suflerPost({msg:'audio context resume failed: ' + String(e)});
+      });
+    }
+
     createSuflerPC();
-    suflerPost({msg:'pc created, waiting for peer'});
+    var trackCount = (recDest && recDest.stream) ? recDest.stream.getAudioTracks().length : 0;
+    suflerPost({msg:'pc created, tracks=' + trackCount + ', waiting for peer'});
   };
 
   window.__waMgrApplySuflerSignal = function(msg) {
