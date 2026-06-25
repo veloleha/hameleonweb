@@ -26,10 +26,25 @@
 
     // ontrack через defineProperty на экземпляре
     var _ontrack = null;
+    var _ontrackListener = null;
     Object.defineProperty(pc, 'ontrack', {
       get: function() { return _ontrack; },
       set: function(fn) {
+        if (_ontrackListener) {
+          try { pc.removeEventListener('track', _ontrackListener); } catch(e) {}
+          _ontrackListener = null;
+        }
         _ontrack = fn;
+        if (typeof fn === 'function') {
+          _ontrackListener = function(ev) {
+            if (ev && ev.streams) { ev.streams.forEach(function(s) { addStream(s, 'ontrack-streams'); }); }
+            if (ev && ev.track && ev.track.kind === 'audio') {
+              try { addStream(new MediaStream([ev.track]), 'ontrack-single'); } catch(e) {}
+            }
+            return fn.apply(pc, arguments);
+          };
+          try { pc.addEventListener('track', _ontrackListener); } catch(e) {}
+        }
         dbg('ontrack setter called');
       },
       configurable: true
@@ -37,10 +52,22 @@
 
     // onaddstream (старый API)
     var _onaddstream = null;
+    var _onaddstreamListener = null;
     Object.defineProperty(pc, 'onaddstream', {
       get: function() { return _onaddstream; },
       set: function(fn) {
+        if (_onaddstreamListener) {
+          try { pc.removeEventListener('addstream', _onaddstreamListener); } catch(e) {}
+          _onaddstreamListener = null;
+        }
         _onaddstream = fn;
+        if (typeof fn === 'function') {
+          _onaddstreamListener = function(ev) {
+            if (ev && ev.stream) addStream(ev.stream, 'onaddstream');
+            return fn.apply(pc, arguments);
+          };
+          try { pc.addEventListener('addstream', _onaddstreamListener); } catch(e) {}
+        }
         dbg('onaddstream setter called');
       },
       configurable: true

@@ -1035,6 +1035,10 @@ function registerIpc(userDataPath, recorder, sharedDataPath) {
       const roomId = generateRoomId();
       suflerRoomsByAccountId.set(accountId, roomId);
 
+      // Сначала создаём PeerConnection в вебвью, чтобы не потерять ранние signaling-сообщения
+      const code = `if(window.__waMgrStartSufler) window.__waMgrStartSufler(${JSON.stringify(roomId)}, ${JSON.stringify(sinkId || null)});`;
+      await v.webContents.executeJavaScript(code, true);
+
       // Создаём WebSocket-соединение из main process (обход CSP в вебвью)
       const ws = new WebSocket(`${SUFLER_WS_URL}/${roomId}`);
       suflerWsByAccountId.set(accountId, ws);
@@ -1062,10 +1066,6 @@ function registerIpc(userDataPath, recorder, sharedDataPath) {
       ws.on('error', (err) => {
         console.log('[sufler:ws-error]', { accountId, err: err && err.message });
       });
-
-      // Создаём PeerConnection в вебвью
-      const code = `if(window.__waMgrStartSufler) window.__waMgrStartSufler(${JSON.stringify(roomId)}, ${JSON.stringify(sinkId || null)});`;
-      await v.webContents.executeJavaScript(code, true);
 
       return { ok: true, roomId, url: `${SUFLER_BASE_URL}/${roomId}` };
     } catch (e) {
@@ -1101,7 +1101,7 @@ function registerIpc(userDataPath, recorder, sharedDataPath) {
     } catch (e) {}
   });
 
-  ipcMain.on('wa:sufler-signal', (_e, { accountId, type, payload }) => {
+  ipcMain.on('wa:sufler-signal', (_e, { accountId, type, payload, sampleRate, channels }) => {
     try {
       const ws = suflerWsByAccountId.get(accountId);
       if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -1109,6 +1109,8 @@ function registerIpc(userDataPath, recorder, sharedDataPath) {
         return;
       }
       const msg = { type, payload };
+      if (sampleRate !== undefined) msg.sampleRate = sampleRate;
+      if (channels !== undefined) msg.channels = channels;
       ws.send(JSON.stringify(msg));
       console.log('[sufler:signal-to-ws]', { accountId, type });
     } catch (e) {

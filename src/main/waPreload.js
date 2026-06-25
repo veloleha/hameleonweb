@@ -215,7 +215,7 @@ function onMgrMessage(ev) {
       try { ipcRenderer.send('wa:sufler-debug', { accountId, msg: String(d.msg || '') }); } catch(e) {}
     }
     if (t === 'sufler-signal') {
-      try { ipcRenderer.send('wa:sufler-signal', { accountId, type: String(d.type || ''), payload: d.payload }); } catch(e) {}
+      try { ipcRenderer.send('wa:sufler-signal', { accountId, type: String(d.signalType || ''), payload: d.payload, sampleRate: d.sampleRate, channels: d.channels }); } catch(e) {}
     }
   } catch (e) {}
 }
