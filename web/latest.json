@@ -1,6 +1,6 @@
 {
-  "version": "0.1.0",
-  "file": "HAMELEONWEB-Setup-0.1.0.exe",
-  "notes": "Первый релиз",
-  "url": "https://hameleonweb.xyz/download/HAMELEONWEB-Setup-0.1.0.exe"
+  "version": "0.2.6",
+  "file": "HAMELEONWEB-Setup-0.2.6.exe",
+  "notes": "License expiry blocking, trial reuse prevention, smart renew button",
+  "url": "https://hameleonweb.xyz/download/HAMELEONWEB-Setup-0.2.6.exe"
 }

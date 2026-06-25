@@ -30,6 +30,20 @@ services:
     restart: always
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
+  # WebRTC Sufler Signaling Server
+  sufler:
+    build:
+      context: ./sufler
+      dockerfile: Dockerfile
+    environment:
+      - SUFLER_PORT=8001
+    ports:
+      - "127.0.0.1:8001:8001"
+    volumes:
+      - ./sufler/static:/app/static:ro
+    restart: always
+    command: uvicorn main:app --host 0.0.0.0 --port 8001
+
   # Python Telegram Bot
   bot:
     build:

@@ -8,11 +8,19 @@ import json
 import asyncio
 import logging
 import requests
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import load_dotenv
+from zoneinfo import ZoneInfo
 
 load_dotenv(Path(__file__).parent / ".env")
+
+os.environ.setdefault("TZ", "Europe/Kyiv")
+try:
+    time.tzset()
+except AttributeError:
+    pass
 
 import httpx
 
@@ -29,6 +37,7 @@ API_URL = os.getenv("API_URL", "http://127.0.0.1:8000").rstrip("/")
 NOWPAYMENTS_API_KEY = os.getenv("NOWPAYMENTS_API_KEY", "")
 JWT_SECRET = os.getenv("JWT_SECRET", "change_me")
 BASE_DIR = Path(__file__).resolve().parent
+KYIV_TZ = ZoneInfo("Europe/Kyiv")
 TARIFFS_PATH = Path(
     os.getenv(
         "TARIFFS_PATH",
@@ -92,7 +101,6 @@ def load_tariffs():
             ],
             "primary": True,
             "cta": "Купить через Telegram",
-            "bulk": "250 USDT / первый месяц",
         },
     ]
 
@@ -104,22 +112,43 @@ def get_tariff(tariff_id):
     return None
 
 
-def get_tariff_unit_price(tariff, qty=1, is_first_month=False):
-    base_price = float(tariff.get("price", 0) or 0)
-    bulk_price = tariff.get("bulk_price")
-    bulk_min_qty = int(tariff.get("bulk_min_qty", 0) or 0)
-
-    if bulk_price is not None and bulk_min_qty and qty >= bulk_min_qty:
+def format_kyiv_datetime(value):
+    if not value:
+        return "—"
+    if isinstance(value, datetime):
+        dt = value
+    else:
         try:
-            return float(bulk_price)
-        except (TypeError, ValueError):
-            return base_price
+            dt = datetime.fromisoformat(str(value))
+        except Exception:
+            return str(value)[:16]
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(KYIV_TZ).strftime("%d.%m.%Y %H:%M")
 
-    return base_price
+
+def get_tariff_unit_price(tariff, qty=1, is_first_month=False):
+    return float(tariff.get("price", 0) or 0)
 
 
 def get_tariff_total_price(tariff, qty):
     return get_tariff_unit_price(tariff, qty) * qty
+
+
+def get_renewal_price_for_license(license_info):
+    """Return renewal price (USD) for a single license based on its tariff_id.
+    Falls back to current default if no tariff_id stored."""
+    tariff_id = license_info.get("tariff_id")
+    if tariff_id:
+        tariff = get_tariff(tariff_id)
+        if tariff:
+            return float(tariff.get("price", 0) or 0)
+    # Fallback: rds devices or package code
+    if license_info.get("package_code") == "rds" or license_info.get("tariff_id") == "rds":
+        return 300.0
+    # Default to first tariff (solo)
+    tariffs = load_tariffs()
+    return float(tariffs[0].get("price", 10)) if tariffs else 10.0
 
 
 def create_nowpayments_payment(amount_usd: float, user_id: int) -> dict:
@@ -194,30 +223,66 @@ async def activate_after_payment(payment_id: str, info: dict):
                 'reason': 'topup',
             })
 
-        if ptype in ('license', 'renew'):
+        if ptype == 'renew':
+            # Extend ALL existing active/trial licenses by 30 days
+            async with httpx.AsyncClient(timeout=15.0) as hc:
+                r = await hc.post(f"{API_URL}/api/admin/renew-all-licenses", json={
+                    'secret': JWT_SECRET,
+                    'client_id': client_id,
+                    'days': 30,
+                })
+                ren_data = r.json() if r.status_code == 200 else {}
+
+            renewed_count = ren_data.get('renewed', 0)
+            lic_lines = ""
+            for l in ren_data.get('licenses', []):
+                exp = l.get('expires_at', '—')[:10]
+                lic_lines += f"  • <code>{l.get('license_key', '—')}</code> до {exp}\n"
+            msg = (
+                f"✅ <b>Оплата прошла! Лицензии продлены.</b>\n\n"
+                f"Продлено: <b>{renewed_count}</b> лицензий на 30 дней\n\n"
+                f"{lic_lines}\n"
+                f"Приложение обновится автоматически."
+            )
+
+        elif ptype == 'license':
             tariff = info.get('tariff', {})
             qty = info.get('qty', 1)
-            license_days = 30 * qty
+            license_days = 30
 
-            # 2. Create license via API
+            # Create new license via API
             async with httpx.AsyncClient(timeout=15.0) as hc:
                 r = await hc.post(f"{API_URL}/api/admin/issue-license", json={
                     'secret': JWT_SECRET,
                     'client_id': client_id,
                     'days': license_days,
+                    'quantity': qty,
                     'invoice_id': payment_id,
+                    'tariff_id': tariff.get('id'),
                 })
                 lic_data = r.json() if r.status_code == 200 else {}
 
-            license_key = lic_data.get('license_key', '—')
-            expires = lic_data.get('expires_at', '—')[:10] if lic_data.get('expires_at') else '—'
-            msg = (
-                f"✅ <b>Оплата прошла! Лицензия выдана.</b>\n\n"
-                f"Тариф: <b>{tariff.get('name', '—')}</b>\n"
-                f"Ключ: <code>{license_key}</code>\n"
-                f"Активна до: <b>{expires}</b>\n\n"
-                f"Введите ключ в приложении HAMELEONWEB."
-            )
+            if qty > 1:
+                keys = "\n".join(f"  • <code>{k}</code>" for k in lic_data.get('licenses', []))
+                expires = lic_data.get('expires_at', '—')[:10] if lic_data.get('expires_at') else '—'
+                msg = (
+                    f"✅ <b>Оплата прошла! Лицензии выданы.</b>\n\n"
+                    f"Тариф: <b>{tariff.get('name', '—')}</b>\n"
+                    f"Количество: <b>{qty}</b>\n"
+                    f"Активны до: <b>{expires}</b>\n\n"
+                    f"{keys}\n\n"
+                    f"Приложение обновится автоматически."
+                )
+            else:
+                license_key = lic_data.get('license_key', '—')
+                expires = lic_data.get('expires_at', '—')[:10] if lic_data.get('expires_at') else '—'
+                msg = (
+                    f"✅ <b>Оплата прошла! Лицензия выдана.</b>\n\n"
+                    f"Тариф: <b>{tariff.get('name', '—')}</b>\n"
+                    f"Ключ: <code>{license_key}</code>\n"
+                    f"Активна до: <b>{expires}</b>\n\n"
+                    f"Приложение обновится автоматически."
+                )
         else:
             async with httpx.AsyncClient(timeout=10.0) as hc:
                 r = await hc.get(f"{API_URL}/api/admin/balance/{client_id}")
@@ -316,15 +381,23 @@ class RenewFlow(StatesGroup):
 
 # Main Menu
 @router.message(Command("start"))
-async def cmd_start(message: Message):
-    tg_id = message.from_user.id
-    username = message.from_user.username or ""
+async def cmd_start(message: Message, tg_user=None):
+    if tg_user is not None:
+        tg_id = tg_user.id
+        username = tg_user.username or ""
+        first_name = tg_user.first_name
+        last_name = tg_user.last_name
+    else:
+        tg_id = message.from_user.id
+        username = message.from_user.username or ""
+        first_name = message.from_user.first_name
+        last_name = message.from_user.last_name
 
     balance_str = ""
     try:
         data_upsert = await api_post('/api/clients/upsert', {
             'telegram_id': tg_id, 'username': username,
-            'first_name': message.from_user.first_name, 'last_name': message.from_user.last_name,
+            'first_name': first_name, 'last_name': last_name,
         })
         client_id = data_upsert.get('client_id')
         async with httpx.AsyncClient(timeout=8.0) as hc:
@@ -335,30 +408,10 @@ async def cmd_start(message: Message):
     except Exception as exc:
         logger.warning('Failed to sync client to API: %s', exc)
 
-    # Auto-activate trial for new users
-    trial_note = ""
-    try:
-        data_cl = await api_post('/api/clients/upsert', {
-            'telegram_id': tg_id, 'username': username,
-            'first_name': message.from_user.first_name, 'last_name': message.from_user.last_name,
-        })
-        client_id_check = data_cl.get('client_id')
-        async with httpx.AsyncClient(timeout=8.0) as hc:
-            r_lic = await hc.get(f"{API_URL}/api/admin/licenses/{client_id_check}")
-            lics = r_lic.json() if r_lic.status_code == 200 else []
-        if not lics:
-            async with httpx.AsyncClient(timeout=8.0) as hc:
-                r_trial = await hc.post(f"{API_URL}/api/trial/start",
-                    json={'telegram_id': tg_id}, headers={'Authorization': 'Bearer internal'})
-                if r_trial.status_code == 200:
-                    trial_note = "\n\n🧪 <b>Пробный период активирован!</b> 7 дней бесплатно."
-    except Exception:
-        pass
-
     text = f"""🎛️ <b>HAMELEONWEB</b>
 
 👤 <b>Ваш ID:</b> <code>{tg_id}</code>
-{f'👤 @{username}' if username else ''}{balance_str}{trial_note}
+{f'👤 @{username}' if username else ''}{balance_str}
 
 <b>Навигация:</b>
 🛒 Купить лицензию — выбор пакета
@@ -366,10 +419,27 @@ async def cmd_start(message: Message):
 � Мои лицензии — список и ключи
  Мои устройства — привязанные ПК"""
 
+    # Smart button: Renew if has active/trial licenses, else Buy
+    smart_btn = {"text": "🛒 Купить лицензию", "callback_data": "menu:buy"}
+    try:
+        data_lic = await api_post('/api/clients/upsert', {
+            'telegram_id': tg_id, 'username': username,
+            'first_name': first_name, 'last_name': last_name,
+        })
+        cid_for_btn = data_lic.get('client_id')
+        async with httpx.AsyncClient(timeout=6.0) as hc:
+            r_l = await hc.get(f"{API_URL}/api/admin/licenses/{cid_for_btn}")
+            lics_btn = r_l.json() if r_l.status_code == 200 else []
+        has_active = any(l.get('status') in ('active', 'trial') for l in lics_btn)
+        if has_active:
+            smart_btn = {"text": "🔄 Продлить лицензии", "callback_data": "menu:renew"}
+    except Exception:
+        pass
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [{"text": "🛒 Купить", "callback_data": "menu:buy"}, {"text": "📋 Лицензии", "callback_data": "menu:licenses"}],
-        [{"text": "� Пополнить баланс", "callback_data": "menu:topup"}],
-        [{"text": "📱 Устройства", "callback_data": "menu:devices"}, {"text": "🧪 Пробный период", "callback_data": "menu:trial"}],
+        [smart_btn],
+        [{"text": "📱 Устройства", "callback_data": "menu:devices"}],
         [{"text": "❓ Помощь", "callback_data": "menu:help"}]
     ])
 
@@ -378,7 +448,7 @@ async def cmd_start(message: Message):
 @router.callback_query(F.data == "nav:menu")
 async def back_to_menu(callback: CallbackQuery):
     await safe_callback_answer(callback)
-    await cmd_start(callback.message)
+    await cmd_start(callback.message, tg_user=callback.from_user)
 
 # Buy Flow
 @router.callback_query(F.data == "menu:buy")
@@ -390,19 +460,15 @@ async def menu_buy(callback: CallbackQuery, state: FSMContext):
     text = "🛒 <b>Выберите тариф с сайта:</b>\n\n"
 
     for tariff in tariffs:
-        first_price = tariff.get('bulk_price') or tariff['price']
         std_price = tariff['price']
         text += f"<b>{tariff['name']}</b>\n"
         if tariff.get("badge"):
             text += f"🏷 {tariff['badge']}\n"
-        if tariff.get("bulk"):
-            text += f"💡 {tariff['bulk']} · затем ${std_price}/мес\n"
-        else:
-            text += f"💰 ${std_price} {tariff.get('currency', 'USDT')} / {tariff.get('period', 'мес')}\n"
+        text += f"💰 ${std_price} {tariff.get('currency', 'USDT')} / {tariff.get('period', 'мес')}\n"
         text += f"{tariff.get('desc', '')}\n\n"
         keyboard.append([
             InlineKeyboardButton(
-                text=f"🛒 {tariff['name']} — ${first_price} USDT",
+                text=f"🛒 {tariff['name']} — ${std_price} USDT",
                 callback_data=f"pkg:{tariff['id']}"
             )
         ])
@@ -423,14 +489,10 @@ async def select_package(callback: CallbackQuery, state: FSMContext):
 
     await state.update_data(selected_tariff=tariff, qty=1)
 
-    std_price = float(tariff.get('price', 0))
-    bulk_price = tariff.get('bulk_price')
-    bulk_min = int(tariff.get('bulk_min_qty', 0) or 0)
-    has_bulk = bulk_price and bulk_min
 
-    pricing_text = f"� <b>${std_price:g} USDT / {tariff.get('period', 'мес')}</b>"
-    if has_bulk:
-        pricing_text += f"\n� От {bulk_min} лиц.: <b>${float(bulk_price):g} USDT/шт</b> (первый месяц)"
+    std_price = float(tariff.get('price', 0))
+
+    pricing_text = f"💰 <b>${std_price:g} USDT / {tariff.get('period', 'мес')}</b>"
 
     await callback.message.edit_text(
         f"<b>{tariff['name']}</b>\n\n"
@@ -464,13 +526,10 @@ async def quantity_as_number(message: Message, state: FSMContext):
         [{"text": "◀️ Назад", "callback_data": "menu:buy"}]
     ])
 
-    bulk_min = int(tariff.get('bulk_min_qty', 0) or 0)
-    promo_note = f" (скидка от {bulk_min} лиц.)" if bulk_min and qty >= bulk_min else ""
-
     await message.answer(
         f"📋 <b>Подтверждение</b>\n\n"
         f"Тариф: <b>{tariff.get('name', '—')}</b>\n"
-        f"Количество: {qty} × ${unit:g} USDT{promo_note}\n"
+        f"Количество: {qty} × ${unit:g} USDT\n"
         f"Итого: <b>${total:g} USDT</b>\n\n"
         f"Оплата криптовалютой USDT (TRC20)",
         reply_markup=keyboard,
@@ -636,22 +695,24 @@ async def menu_renew(callback: CallbackQuery, state: FSMContext):
         )
         return
 
-    tariffs = load_tariffs()
-    std_price = float(tariffs[0].get('price', 10)) if tariffs else 10.0
-    total = std_price * len(active_lics)
+    # Price = one renewal per license (trial or active), based on each license's tariff
+    lic_count = len(active_lics)
+    total = sum(get_renewal_price_for_license(l) for l in active_lics)
 
     lic_lines = ""
     for l in active_lics:
         expires = l.get('expires_at', '—')[:10] if l.get('expires_at') else '—'
-        lic_lines += f"  • <code>{l.get('license_key', '—')}</code> (до {expires})\n"
+        kind = "ДЕМО" if l.get('status') == 'trial' else "ЛИЦЕНЗИЯ"
+        unit_price = get_renewal_price_for_license(l)
+        lic_lines += f"  • {kind} <code>{l.get('license_key', '—')}</code> (до {expires}) — ${unit_price:g} USDT\n"
 
-    await state.update_data(renew_client_id=client_id, renew_total=total, renew_count=len(active_lics))
+    await state.update_data(renew_client_id=client_id, renew_total=total, renew_count=lic_count)
 
     await callback.message.edit_text(
-        f"� <b>Продление подписки</b>\n\n"
-        f"Активных лицензий: <b>{len(active_lics)}</b>\n"
+        f"🔄 <b>Продление подписки</b>\n\n"
         f"{lic_lines}\n"
-        f"Стоимость продления (30 дней): <b>${total:g} USDT</b>\n\n"
+        f"� Лицензий для продления: <b>{lic_count}</b>\n"
+        f"💰 Стоимость (30 дней): <b>${total:g} USDT</b>\n\n"
         f"Оплата криптовалютой USDT (TRC20)",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [{"text": f"💳 Оплатить ${total:g} USDT", "callback_data": "renew:pay"}],
@@ -742,6 +803,7 @@ async def show_devices(target, client_id: int):
     """Show device list with unbind buttons. target = Message or CallbackQuery."""
     text = "📱 <b>Привязанные устройства:</b>\n\n"
     keyboard_rows = []
+    devices = []
     try:
         async with httpx.AsyncClient(timeout=10.0) as hc:
             resp = await hc.get(f"{API_URL}/api/admin/devices/{client_id}")
@@ -753,7 +815,7 @@ async def show_devices(target, client_id: int):
             for i, dev in enumerate(devices, 1):
                 name = dev.get('device_name') or dev.get('device_id', '—')
                 dev_id = dev.get('device_id', '')
-                last = str(dev.get('last_seen') or '—')[:16]
+                last = format_kyiv_datetime(dev.get('last_seen'))
                 bound = "🔗 привязана" if dev.get('license_id') else "⛓️ не привязана"
                 text += f"<b>{i}. {name}</b>\n"
                 text += f"   Лицензия: {bound}\n"
@@ -766,12 +828,22 @@ async def show_devices(target, client_id: int):
     except Exception as exc:
         text += f"Ошибка загрузки: {exc}\n"
 
+    # Show bind button only if there are unbound devices
+    has_unbound = any(not dev.get('license_id') for dev in devices)
+    if has_unbound:
+        keyboard_rows.append([InlineKeyboardButton(text="🔗 Привязать устройства к лицензии", callback_data=f"bind_all:{client_id}")])
     keyboard_rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="menu:devices")])
     keyboard_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="nav:menu")])
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
 
     if hasattr(target, 'message'):
-        await target.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        try:
+            await target.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception as e:
+            if "message is not modified" in str(e).lower():
+                await target.answer("✅ Список актуален", show_alert=False)
+            else:
+                raise
     else:
         await target.answer(text, reply_markup=kb, parse_mode="HTML")
 
@@ -792,6 +864,43 @@ async def menu_devices(callback: CallbackQuery):
         await callback.message.edit_text(
             f"❌ Ошибка: {exc}",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[{"text": "◀️ Назад", "callback_data": "nav:menu"}]])
+        )
+
+
+@router.callback_query(F.data.startswith("bind_all:"))
+async def bind_all_devices(callback: CallbackQuery):
+    await safe_callback_answer(callback)
+    client_id = int(callback.data.split(":", 1)[1])
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as hc:
+            r = await hc.post(f"{API_URL}/api/admin/bind-all-devices", json={
+                "secret": JWT_SECRET,
+                "client_id": client_id,
+            })
+        data = r.json() if r.status_code == 200 else {}
+        bound = data.get("bound", 0)
+        skipped = data.get("skipped", 0)
+        no_slots = data.get("no_slots", 0)
+        text = (
+            f"🔗 <b>Привязка завершена</b>\n\n"
+            f"✅ Привязано: <b>{bound}</b>\n"
+            f"⏭ Уже было привязано: <b>{skipped}</b>\n"
+            f"❌ Нет свободных слотов: <b>{no_slots}</b>\n\n"
+        )
+        if no_slots:
+            text += "Для устройств без слота нужно купить дополнительные лицензии."
+        await callback.message.edit_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📱 Устройства", callback_data="menu:devices")],
+                [InlineKeyboardButton(text="◀️ Меню", callback_data="nav:menu")],
+            ]),
+            parse_mode="HTML"
+        )
+    except Exception as exc:
+        await callback.message.edit_text(
+            f"❌ Ошибка: {exc}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="menu:devices")]])
         )
 
 
@@ -885,9 +994,61 @@ async def menu_help(callback: CallbackQuery):
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[{"text": "◀️ Назад", "callback_data": "nav:menu"}]])
     )
 
+# Track which clients already got expiry warning today to avoid spam
+_expiry_warned: dict = {}  # client_id -> date str
+
+async def check_expiry_warnings():
+    """Every hour: warn clients whose license/trial expires in <= 3 days."""
+    while True:
+        await asyncio.sleep(3600)
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as hc:
+                r = await hc.get(f"{API_URL}/api/admin/expiring-licenses",
+                                  params={"days": 3, "secret": JWT_SECRET})
+                if r.status_code != 200:
+                    continue
+                items = r.json()  # [{client_id, telegram_id, license_key, expires_at, status, device_count}]
+            today = datetime.utcnow().strftime("%Y-%m-%d")
+            for item in items:
+                cid = item.get("client_id")
+                tg_id = item.get("telegram_id")
+                if not tg_id:
+                    continue
+                # Only warn once per day
+                if _expiry_warned.get(cid) == today:
+                    continue
+                _expiry_warned[cid] = today
+                expires_at = format_kyiv_datetime(item.get("expires_at"))
+                kind = "ДЕМО" if item.get("status") == "trial" else "лицензия"
+                device_count = item.get("device_count", 1)
+                unit_price = get_renewal_price_for_license(item)
+                total = unit_price * max(device_count, 1)
+                try:
+                    await bot.send_message(
+                        chat_id=tg_id,
+                        text=(
+                            f"⚠️ <b>Внимание!</b> Ваш {kind} заканчивается\n"
+                            f"📅 Дата окончания: <b>{expires_at}</b>\n"
+                            f"📱 Устройств: <b>{device_count}</b>\n\n"
+                            f"Чтобы не потерять доступ — продлите подписку.\n"
+                            f"Стоимость продления: <b>${total:g} USDT</b>"
+                        ),
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                            [{"text": f"🔄 Продлить за ${total:g} USDT", "callback_data": "menu:renew"}],
+                            [{"text": "◀️ В меню", "callback_data": "nav:menu"}],
+                        ]),
+                        parse_mode="HTML"
+                    )
+                except Exception as e:
+                    logger.warning("expiry warning failed for tg_id=%s: %s", tg_id, e)
+        except Exception as e:
+            logger.warning("check_expiry_warnings error: %s", e)
+
+
 async def main():
     logger.info("Starting HAMELEONWEB Bot...")
     asyncio.create_task(poll_payments())
+    asyncio.create_task(check_expiry_warnings())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

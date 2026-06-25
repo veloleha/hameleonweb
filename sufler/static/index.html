@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HAMELEONWEB — Голосовой суфлёр</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0b0d10;
+      color: #e4e6eb;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      padding: 40px 20px;
+    }
+    .container {
+      max-width: 480px;
+      width: 100%;
+      text-align: center;
+    }
+    h1 { font-size: 22px; margin-bottom: 8px; }
+    .room { color: #8a8f98; font-size: 14px; margin-bottom: 32px; }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 18px;
+      border-radius: 999px;
+      background: #1e2229;
+      font-size: 14px;
+      margin-bottom: 24px;
+    }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #ef4444;
+    }
+    .status-dot.connected { background: #22c55e; }
+    .btn {
+      background: #3b82f6;
+      color: #fff;
+      border: none;
+      padding: 14px 28px;
+      font-size: 16px;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background .2s;
+    }
+    .btn:hover { background: #2563eb; }
+    .btn:disabled { background: #334155; cursor: not-allowed; }
+    .btn-hangup { background: #ef4444; }
+    .btn-hangup:hover { background: #dc2626; }
+    .volume {
+      margin-top: 24px;
+      width: 100%;
+    }
+    .volume label { display: block; font-size: 13px; color: #8a8f98; margin-bottom: 8px; }
+    .volume input { width: 100%; }
+    .hint {
+      margin-top: 24px;
+      font-size: 13px;
+      color: #8a8f98;
+      line-height: 1.5;
+    }
+    .audio-row {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      margin-top: 24px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Голосовой суфлёр</h1>
+    <div class="room" id="roomId">Загрузка...</div>
+
+    <div class="status" id="status">
+      <span class="status-dot" id="statusDot"></span>
+      <span id="statusText">Ожидание подключения</span>
+    </div>
+
+    <div class="audio-row">
+      <button class="btn" id="connectBtn" disabled>Подключиться</button>
+      <button class="btn btn-hangup" id="hangupBtn" disabled>Завершить</button>
+    </div>
+
+    <div class="volume">
+      <label for="volumeSlider">Громкость голоса спикера</label>
+      <input type="range" id="volumeSlider" min="0" max="100" value="80">
+    </div>
+
+    <div class="hint">
+      Нажмите «Подключиться», чтобы оператор услышал звук со стороны спикера и мог говорить ему подсказки.
+    </div>
+  </div>
+
+  <script>
+    const roomId = window.location.pathname.split('/').pop();
+    document.getElementById('roomId').textContent = `Комната: ${roomId}`;
+
+    const wsUrl = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws/sufler/${roomId}`;
+    const connectBtn = document.getElementById('connectBtn');
+    const hangupBtn = document.getElementById('hangupBtn');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const volumeSlider = document.getElementById('volumeSlider');
+
+    let ws = null;
+    let pc = null;
+    let localStream = null;
+    let remoteAudio = null;
+
+    function setStatus(text, connected) {
+      statusText.textContent = text;
+      statusDot.classList.toggle('connected', connected);
+    }
+
+    async function start() {
+      connectBtn.disabled = true;
+      setStatus('Запрос микрофона...', false);
+
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      } catch (err) {
+        console.error(err);
+        setStatus('Нет доступа к микрофону', false);
+        connectBtn.disabled = false;
+        return;
+      }
+
+      setStatus('Подключение к серверу...', false);
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ type: 'join', role: 'operator' }));
+      };
+
+      ws.onclose = () => {
+        setStatus('Соединение закрыто', false);
+        hangup();
+      };
+
+      ws.onerror = (err) => {
+        console.error('WS error', err);
+        setStatus('Ошибка WebSocket', false);
+      };
+
+      ws.onmessage = async (event) => {
+        const msg = JSON.parse(event.data);
+        console.log('operator msg', msg);
+
+        if (msg.type === 'peer-joined') {
+          setStatus('Спикер подключён', true);
+          await createOffer();
+        } else if (msg.type === 'peer-left') {
+          setStatus('Спикер отключился', false);
+        } else if (msg.type === 'offer') {
+          await handleOffer(msg.payload);
+        } else if (msg.type === 'answer') {
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.payload));
+        } else if (msg.type === 'ice-candidate') {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(msg.payload));
+          } catch (e) {
+            console.error('addIceCandidate error', e);
+          }
+        }
+      };
+
+      hangupBtn.disabled = false;
+    }
+
+    async function createPeerConnection() {
+      if (pc) return;
+
+      pc = new RTCPeerConnection({
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' }
+        ]
+      });
+
+      localStream.getAudioTracks().forEach(track => pc.addTrack(track, localStream));
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          ws.send(JSON.stringify({ type: 'ice-candidate', payload: event.candidate.toJSON() }));
+        }
+      };
+
+      pc.ontrack = (event) => {
+        if (!remoteAudio) {
+          remoteAudio = document.createElement('audio');
+          remoteAudio.autoplay = true;
+          remoteAudio.volume = volumeSlider.value / 100;
+          document.body.appendChild(remoteAudio);
+        }
+        remoteAudio.srcObject = event.streams[0];
+      };
+
+      pc.onconnectionstatechange = () => {
+        console.log('PC state', pc.connectionState);
+        if (pc.connectionState === 'connected') {
+          setStatus('WebRTC соединение активно', true);
+        } else if (pc.connectionState === 'failed') {
+          setStatus('WebRTC соединение прервано', false);
+        }
+      };
+    }
+
+    async function createOffer() {
+      await createPeerConnection();
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      ws.send(JSON.stringify({ type: 'offer', payload: offer }));
+    }
+
+    async function handleOffer(offer) {
+      await createPeerConnection();
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      ws.send(JSON.stringify({ type: 'answer', payload: answer }));
+    }
+
+    function hangup() {
+      if (pc) {
+        pc.close();
+        pc = null;
+      }
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+      if (localStream) {
+        localStream.getTracks().forEach(t => t.stop());
+        localStream = null;
+      }
+      if (remoteAudio) {
+        remoteAudio.remove();
+        remoteAudio = null;
+      }
+      connectBtn.disabled = false;
+      hangupBtn.disabled = true;
+      setStatus('Ожидание подключения', false);
+    }
+
+    connectBtn.addEventListener('click', start);
+    hangupBtn.addEventListener('click', hangup);
+    volumeSlider.addEventListener('input', () => {
+      if (remoteAudio) remoteAudio.volume = volumeSlider.value / 100;
+    });
+
+    // Allow connecting when loaded
+    setStatus('Готов к подключению', false);
+    connectBtn.disabled = false;
+  </script>
+</body>
+</html>
