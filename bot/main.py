@@ -151,6 +151,14 @@ def get_renewal_price_for_license(license_info):
     return float(tariffs[0].get("price", 10)) if tariffs else 10.0
 
 
+def get_sufler_price() -> float:
+    """Return current sufler addon price (USD) from tariffs."""
+    tariff = get_tariff("sufler")
+    if tariff:
+        return float(tariff.get("price", 0) or 0)
+    return 150.0
+
+
 def build_order_description(title: str, lines: list[str], total_usd: float) -> str:
     parts = [f"{title}: "]
     parts.append("; ".join(line for line in lines if line))
@@ -175,16 +183,30 @@ async def fetch_device_name_map(client_id: int) -> dict:
     return device_map
 
 
-async def build_renew_receipt(client_id: int, licenses: list[dict]) -> tuple[str, float]:
+async def build_renew_receipt(client_id: int, licenses: list[dict], include_sufler: bool = False) -> tuple[str, list[str], float]:
+    device_map = await fetch_device_name_map(client_id)
+    lines = []
     total = 0.0
-    for lic in licenses:
-        total += get_renewal_price_for_license(lic)
+    sufler_price = get_sufler_price()
 
-    return build_order_description(
-        "Продление",
-        [f"Лицензии на сумму ${total:g} USDT"],
-        total,
-    ), total
+    for lic in licenses:
+        unit_price = get_renewal_price_for_license(lic)
+        expires = lic.get('expires_at', '—')[:10] if lic.get('expires_at') else '—'
+        kind = "ДЕМО" if lic.get('status') == 'trial' else "ЛИЦЕНЗИЯ"
+        license_key = lic.get('license_key', '—')
+        device_name = device_map.get(int(lic.get('id', 0)), "Устройство")
+
+        line = f"{device_name} — {kind} <code>{license_key}</code> (до {expires}) — ${unit_price:g} USDT"
+        lines.append(line)
+        total += unit_price
+
+        if include_sufler:
+            lines.append(f"  + Модуль суфлёра — ${sufler_price:g} USDT")
+            total += sufler_price
+
+    title = "Продление с суфлёром" if include_sufler else "Продление"
+    description = build_order_description(title, lines, total)
+    return description, lines, total
 
 
 def create_nowpayments_payment(amount_usd: float, user_id: int, order_description: str = "") -> dict:
@@ -252,7 +274,7 @@ async def activate_after_payment(payment_id: str, info: dict):
 
     try:
         credit_reason = 'topup'
-        if ptype == 'renew':
+        if ptype in ('renew', 'renew_base', 'renew_bundle'):
             credit_reason = 'license_renewal'
 
         # 1. Credit balance via API
@@ -265,7 +287,7 @@ async def activate_after_payment(payment_id: str, info: dict):
                 'reason': credit_reason,
             })
 
-        if ptype == 'renew':
+        if ptype in ('renew', 'renew_base'):
             # Extend ALL existing active/trial licenses by 30 days
             async with httpx.AsyncClient(timeout=15.0) as hc:
                 r = await hc.post(f"{API_URL}/api/admin/renew-all-licenses", json={
@@ -283,6 +305,30 @@ async def activate_after_payment(payment_id: str, info: dict):
             msg = (
                 f"✅ <b>Оплата прошла! Лицензии продлены.</b>\n\n"
                 f"Продлено: <b>{renewed_count}</b> лицензий на 30 дней\n\n"
+                f"{lic_lines}\n"
+                f"Приложение обновится автоматически."
+            )
+
+        elif ptype == 'renew_bundle':
+            async with httpx.AsyncClient(timeout=15.0) as hc:
+                r = await hc.post(f"{API_URL}/api/admin/renew-all-licenses", json={
+                    'secret': JWT_SECRET,
+                    'client_id': client_id,
+                    'days': 30,
+                    'include_sufler': True,
+                })
+                ren_data = r.json() if r.status_code == 200 else {}
+
+            renewed_count = ren_data.get('renewed', 0)
+            addon_renewed = ren_data.get('addon_renewed', 0)
+            lic_lines = ""
+            for l in ren_data.get('licenses', []):
+                exp = l.get('expires_at', '—')[:10]
+                lic_lines += f"  • <code>{l.get('license_key', '—')}</code> до {exp}\n"
+            msg = (
+                f"✅ <b>Оплата прошла! Лицензии и суфлёр продлены.</b>\n\n"
+                f"Продлено: <b>{renewed_count}</b> лицензий на 30 дней\n"
+                f"Суфлёр продлён: <b>{addon_renewed}</b> лицензий\n\n"
                 f"{lic_lines}\n"
                 f"Приложение обновится автоматически."
             )
@@ -761,6 +807,8 @@ async def menu_renew(callback: CallbackQuery, state: FSMContext):
         base_total += unit_price
         lic_lines += f"  • {kind} <code>{l.get('license_key', '—')}</code> (до {expires}) — ${unit_price:g} USDT\n"
 
+    sufler_total = base_total + len(active_lics) * get_sufler_price()
+
     await state.update_data(renew_client_id=client_id, renew_count=len(active_lics), renew_licenses=active_lics)
     await state.set_state(RenewFlow.confirming)
 
@@ -769,9 +817,11 @@ async def menu_renew(callback: CallbackQuery, state: FSMContext):
         f"{lic_lines}\n"
         f"Лицензий для продления: <b>{len(active_lics)}</b>\n"
         f"Стандартное продление: <b>${base_total:g} USDT</b>\n"
+        f"Продление с суфлёром: <b>${sufler_total:g} USDT</b>\n"
         f"Выберите вариант оплаты:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [{"text": f"💳 Продлить стандартную — ${base_total:g} USDT", "callback_data": "renew:base"}],
+            [{"text": f"🎤 Продлить с суфлёром — ${sufler_total:g} USDT", "callback_data": "renew:sufler"}],
             [{"text": "◀️ Назад", "callback_data": "nav:menu"}]
         ]),
         parse_mode="HTML"
@@ -791,15 +841,47 @@ async def renew_base(callback: CallbackQuery, state: FSMContext):
         )
         return
 
-    receipt, total = await build_renew_receipt(client_id, licenses)
-    await state.update_data(renew_total=total, renew_type="renew", renew_receipt=receipt)
+    receipt, lines, total = await build_renew_receipt(client_id, licenses, include_sufler=False)
+    await state.update_data(renew_total=total, renew_type="renew_base", renew_receipt=receipt, renew_receipt_lines=lines)
     await state.set_state(RenewFlow.confirming)
 
+    items_block = "\n".join(f"• {line}" for line in lines)
     await callback.message.edit_text(
         f"📋 <b>Подтверждение оплаты</b>\n\n"
-        f"Продление стандартных лицензий: <b>{len(licenses)}</b> шт.\n"
-        f"Сумма к оплате: <b>${total:g} USDT</b>\n\n"
+        f"{items_block}\n\n"
+        f"Итого: <b>${total:g} USDT</b>\n\n"
         f"После оплаты стандартные лицензии будут продлены на 30 дней.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [{"text": f"💳 Оплатить ${total:g} USDT", "callback_data": "renew:pay"}],
+            [{"text": "◀️ Назад", "callback_data": "menu:renew"}],
+        ]),
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data == "renew:sufler")
+async def renew_sufler(callback: CallbackQuery, state: FSMContext):
+    await safe_callback_answer(callback)
+    data = await state.get_data()
+    client_id = data.get("renew_client_id")
+    licenses = data.get("renew_licenses") or []
+    if not client_id or not licenses:
+        await callback.message.edit_text(
+            "❌ Не удалось определить лицензии для продления.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[{"text": "◀️ Назад", "callback_data": "menu:renew"}]])
+        )
+        return
+
+    receipt, lines, total = await build_renew_receipt(client_id, licenses, include_sufler=True)
+    await state.update_data(renew_total=total, renew_type="renew_bundle", renew_receipt=receipt, renew_receipt_lines=lines)
+    await state.set_state(RenewFlow.confirming)
+
+    items_block = "\n".join(f"• {line}" for line in lines)
+    await callback.message.edit_text(
+        f"📋 <b>Подтверждение оплаты</b>\n\n"
+        f"{items_block}\n\n"
+        f"Итого: <b>${total:g} USDT</b>\n\n"
+        f"После оплаты лицензии и модуль суфлёра будут продлены на 30 дней.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [{"text": f"💳 Оплатить ${total:g} USDT", "callback_data": "renew:pay"}],
             [{"text": "◀️ Назад", "callback_data": "menu:renew"}],
@@ -820,9 +902,10 @@ async def renew_pay(callback: CallbackQuery, state: FSMContext):
     total = data.get('renew_total', 0)
     client_id = data.get('renew_client_id')
     renew_type = data.get('renew_type', 'renew')
+    renew_receipt_lines = data.get('renew_receipt_lines') or [f"Лицензии на сумму ${total:g} USDT"]
     order_description = data.get('renew_receipt') or build_order_description(
         "Продление",
-        [f"Лицензии на сумму ${total:g} USDT"],
+        renew_receipt_lines,
         total,
     )
     tg_id = callback.from_user.id
@@ -859,9 +942,13 @@ async def renew_pay(callback: CallbackQuery, state: FSMContext):
             'created_at': datetime.utcnow().timestamp(),
         }
 
+    items_block = "\n".join(f"• {line}" for line in renew_receipt_lines)
+
     await state.clear()
     await callback.message.edit_text(
         f"✅ <b>Счёт на продление создан!</b>\n\n"
+        f"📋 <b>Чек:</b>\n{items_block}\n\n"
+        f"Итого: <b>${total:g} USDT</b>\n\n"
         f"ID: <code>{payment_id}</code>\n\n"
         f"Отправьте: <b>{pay_amount} {pay_currency}</b>\n"
         f"Сеть: <b>{network}</b>\n"
