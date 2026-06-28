@@ -34,6 +34,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_ID = int(os.getenv("TELEGRAM_ADMIN_ID", "0"))
 API_URL = os.getenv("API_URL", "http://127.0.0.1:8000").rstrip("/")
+WEBSITE_URL = os.getenv("WEBSITE_URL", "https://hameleonweb.xyz").rstrip("/")
 NOWPAYMENTS_API_KEY = os.getenv("NOWPAYMENTS_API_KEY", "")
 JWT_SECRET = os.getenv("JWT_SECRET", "change_me")
 BASE_DIR = Path(__file__).resolve().parent
@@ -477,19 +478,44 @@ class RenewFlow(StatesGroup):
     selecting_mode = State()
     confirming = State()
 
-# Main Menu
-@router.message(Command("start"))
-async def cmd_start(message: Message, tg_user=None):
-    if tg_user is not None:
-        tg_id = tg_user.id
-        username = tg_user.username or ""
-        first_name = tg_user.first_name
-        last_name = tg_user.last_name
+async def send_or_edit(target: Message | CallbackQuery, text: str, reply_markup, parse_mode="HTML"):
+    if isinstance(target, CallbackQuery):
+        await target.message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
     else:
-        tg_id = message.from_user.id
-        username = message.from_user.username or ""
-        first_name = message.from_user.first_name
-        last_name = message.from_user.last_name
+        await target.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+
+
+async def show_home(tg_user, target: Message | CallbackQuery):
+    text = """🏠 <b>Главная страница</b>
+
+<b>HAMELEONWEB</b> — автоматическая запись звонков WhatsApp для Windows.
+
+<b>Что делает:</b>
+• Записывает входящие и исходящие звонки
+• Сохраняет разговоры в MP3
+• Подставляет номер собеседника в имя файла
+• Поддерживает несколько WhatsApp-аккаунтов
+• Демо-период 7 дней
+
+<b>Как начать:</b>
+1. Скачайте приложение
+2. Войдите по Telegram ID
+3. Получите код в боте
+4. Начинайте пользоваться"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [{"text": "⬇️ Скачать актуальную версию", "callback_data": "download:request"}],
+        [{"text": "🛒 Купить лицензию", "callback_data": "menu:buy"}, {"text": "📋 Мои лицензии", "callback_data": "menu:licenses"}],
+        [{"text": "🔄 Продлить", "callback_data": "menu:renew"}, {"text": "📱 Устройства", "callback_data": "menu:devices"}],
+        [{"text": "❓ Помощь", "callback_data": "menu:help"}]
+    ])
+    await send_or_edit(target, text, keyboard, parse_mode="HTML")
+
+
+async def show_menu(tg_user, target: Message | CallbackQuery):
+    tg_id = tg_user.id
+    username = tg_user.username or ""
+    first_name = tg_user.first_name
+    last_name = tg_user.last_name
 
     balance_str = ""
     try:
@@ -514,8 +540,8 @@ async def cmd_start(message: Message, tg_user=None):
 <b>Навигация:</b>
 🛒 Купить лицензию — выбор пакета
 🔄 Продлить подписку — продление активных лицензий
-� Мои лицензии — список и ключи
- Мои устройства — привязанные ПК"""
+📋 Мои лицензии — список и ключи
+📱 Мои устройства — привязанные ПК"""
 
     # Smart button: Renew if has active/trial licenses, else Buy
     smart_btn = {"text": "🛒 Купить лицензию", "callback_data": "menu:buy"}
@@ -535,18 +561,84 @@ async def cmd_start(message: Message, tg_user=None):
         pass
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [{"text": "🏠 Главная страница", "callback_data": "menu:home"}],
         [{"text": "🛒 Купить", "callback_data": "menu:buy"}, {"text": "📋 Лицензии", "callback_data": "menu:licenses"}],
         [smart_btn],
         [{"text": "📱 Устройства", "callback_data": "menu:devices"}],
         [{"text": "❓ Помощь", "callback_data": "menu:help"}]
     ])
 
-    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+    await send_or_edit(target, text, keyboard, parse_mode="HTML")
+
+
+# Main Menu
+@router.message(Command("start"))
+async def cmd_start(message: Message):
+    await show_home(message.from_user, message)
+
+
+@router.callback_query(F.data == "menu:home")
+async def menu_home(callback: CallbackQuery):
+    await safe_callback_answer(callback)
+    await show_home(callback.from_user, callback)
+
 
 @router.callback_query(F.data == "nav:menu")
 async def back_to_menu(callback: CallbackQuery):
     await safe_callback_answer(callback)
-    await cmd_start(callback.message, tg_user=callback.from_user)
+    await show_menu(callback.from_user, callback)
+
+
+# Download latest version
+@router.callback_query(F.data == "download:request")
+async def download_request(callback: CallbackQuery):
+    await safe_callback_answer(callback)
+    await callback.message.edit_text("⏳ Получаю информацию о последней версии...")
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as hc:
+            r = await hc.get(f"{WEBSITE_URL}/latest.json")
+            latest = r.json() if r.status_code == 200 else {}
+        if not latest:
+            raise Exception("latest.json пуст")
+
+        version = latest.get('version', '—')
+        filename = latest.get('file', '—')
+        url = latest.get('url') or f"{WEBSITE_URL}/download/{filename}"
+        notes = latest.get('notes', '')
+
+        text = (
+            f"⬇️ <b>Актуальная версия HAMELEONWEB</b>\n\n"
+            f"Версия: <b>{version}</b>\n"
+            f"Файл: <code>{filename}</code>"
+        )
+        if notes:
+            text += f"\n\n📝 <b>Что нового:</b>\n{notes}"
+
+        try:
+            await bot.send_document(
+                chat_id=callback.message.chat.id,
+                document=url,
+                caption=text,
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.warning(f"send_document failed: {e}, sending link instead")
+            await callback.message.edit_text(
+                f"{text}\n\n👇 Ссылка для скачивания:\n{url}",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [{"text": "⬇️ Скачать", "url": url}],
+                    [{"text": "◀️ В меню", "callback_data": "nav:menu"}]
+                ]),
+                parse_mode="HTML"
+            )
+        else:
+            await callback.message.delete()
+    except Exception as exc:
+        logger.error(f"download_request error: {exc}")
+        await callback.message.edit_text(
+            f"❌ Не удалось получить информацию о версии: {exc}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[{"text": "◀️ В меню", "callback_data": "nav:menu"}]])
+        )
 
 # Buy Flow
 @router.callback_query(F.data == "menu:buy")
