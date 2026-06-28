@@ -1,6 +1,6 @@
 {
-  "version": "0.2.6",
-  "file": "HAMELEONWEB-Setup-0.2.6.exe",
-  "notes": "License expiry blocking, trial reuse prevention, smart renew button",
-  "url": "https://hameleonweb.xyz/download/HAMELEONWEB-Setup-0.2.6.exe"
+  "version": "0.3.1",
+  "file": "HAMELEONWEB-Setup-0.3.1.exe",
+  "notes": "Temporary disable of contact profile auto-open, sufler latency reduction, operator self-monitoring mute",
+  "url": "https://hameleonweb.xyz/download/HAMELEONWEB-Setup-0.3.1.exe"
 }

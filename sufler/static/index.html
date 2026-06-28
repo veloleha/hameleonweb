@@ -98,6 +98,7 @@
     <div class="hint">
       Нажмите «Подключиться», чтобы оператор услышал звук со стороны спикера и мог говорить ему подсказки.
     </div>
+    <div class="hint" id="relayNote">Relay diagnostics will appear here.</div>
   </div>
 
   <script>
@@ -115,6 +116,127 @@
     let pc = null;
     let localStream = null;
     let remoteAudio = null;
+    let relayCaptureCtx = null;
+    let relayCaptureNode = null;
+    let relayCaptureSource = null;
+    let relayCaptureGain = null;
+    let relayPlayCtx = null;
+    let relayPlayNode = null;
+    let relayPlayQueue = [];
+    let relayPlayOffset = 0;
+
+    function rmsOfFloat32(samples) {
+      if (!samples || !samples.length) return 0;
+      let sum = 0;
+      for (let i = 0; i < samples.length; i++) {
+        const v = samples[i] || 0;
+        sum += v * v;
+      }
+      return Math.sqrt(sum / samples.length);
+    }
+
+    function logRelay(msg) {
+      console.log('[relay]', msg);
+      const note = document.getElementById('relayNote');
+      if (note) note.textContent = String(msg);
+    }
+
+    function float32ToBase64(float32) {
+      const pcm = new Int16Array(float32.length);
+      for (let i = 0; i < float32.length; i++) {
+        const s = Math.max(-1, Math.min(1, float32[i] || 0));
+        pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      }
+      const bytes = new Uint8Array(pcm.buffer);
+      let binary = '';
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+      }
+      return btoa(binary);
+    }
+
+    function base64ToFloat32(b64) {
+      const binary = atob(String(b64 || ''));
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const pcm = new Int16Array(bytes.buffer);
+      const out = new Float32Array(pcm.length);
+      for (let i = 0; i < pcm.length; i++) out[i] = pcm[i] / 32768;
+      return out;
+    }
+
+    function startRelayCapture() {
+      if (relayCaptureNode || !localStream) return;
+      const AC = window.AudioContext || window.webkitAudioContext;
+      relayCaptureCtx = new AC();
+      relayCaptureSource = relayCaptureCtx.createMediaStreamSource(localStream);
+      relayCaptureNode = relayCaptureCtx.createScriptProcessor(1024, 1, 1);
+      // Глушим выход в динамики, чтобы оператор не слышал сам себя.
+      relayCaptureGain = relayCaptureCtx.createGain();
+      relayCaptureGain.gain.value = 0;
+      relayCaptureSource.connect(relayCaptureNode);
+      relayCaptureNode.connect(relayCaptureGain);
+      relayCaptureGain.connect(relayCaptureCtx.destination);
+      relayCaptureNode.onaudioprocess = (ev) => {
+        try {
+          const input = ev.inputBuffer.getChannelData(0);
+          if (!input || !input.length || !ws || ws.readyState !== WebSocket.OPEN) return;
+          const copy = new Float32Array(input.length);
+          copy.set(input);
+          ws.send(JSON.stringify({ type: 'audio', payload: float32ToBase64(copy), sampleRate: relayCaptureCtx.sampleRate || 48000, channels: 1, role: 'operator' }));
+        } catch (e) {
+          console.error('operator relay capture error', e);
+        }
+      };
+    }
+
+    function queuedSampleCount() {
+      let total = 0;
+      for (let i = 0; i < relayPlayQueue.length; i++) total += relayPlayQueue[i].length;
+      return total - relayPlayOffset;
+    }
+
+    function queueRelayPlayback(base64, meta = {}) {
+      const samples = base64ToFloat32(base64);
+      if (!samples || !samples.length) return;
+      const rms = rmsOfFloat32(samples);
+      logRelay(`recv chunk=${samples.length} rms=${rms.toFixed(4)} sampleRate=${meta.sampleRate || 'n/a'} channels=${meta.channels || 'n/a'}`);
+      relayPlayQueue.push(samples);
+      // Не даём очереди расти больше ~120 мс, иначе задержка накапливается.
+      const sr = (relayPlayCtx && relayPlayCtx.sampleRate) || meta.sampleRate || 48000;
+      const maxQueued = Math.floor(sr * 0.12);
+      while (queuedSampleCount() > maxQueued && relayPlayQueue.length > 1) {
+        relayPlayQueue.shift();
+        relayPlayOffset = 0;
+      }
+      if (!relayPlayNode) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        relayPlayCtx = new AC();
+        relayPlayNode = relayPlayCtx.createScriptProcessor(1024, 0, 1);
+        relayPlayNode.onaudioprocess = (ev) => {
+          const out = ev.outputBuffer.getChannelData(0);
+          let idx = 0;
+          while (idx < out.length) {
+            while (relayPlayQueue.length && relayPlayOffset >= relayPlayQueue[0].length) {
+              relayPlayQueue.shift();
+              relayPlayOffset = 0;
+            }
+            if (!relayPlayQueue.length) {
+              out[idx++] = 0;
+              continue;
+            }
+            const chunk = relayPlayQueue[0];
+            const take = Math.min(chunk.length - relayPlayOffset, out.length - idx);
+            out.set(chunk.subarray(relayPlayOffset, relayPlayOffset + take), idx);
+            idx += take;
+            relayPlayOffset += take;
+          }
+        };
+        relayPlayNode.connect(relayPlayCtx.destination);
+        logRelay('playback started');
+      }
+    }
 
     function setStatus(text, connected) {
       statusText.textContent = text;
@@ -126,7 +248,7 @@
       setStatus('Запрос микрофона...', false);
 
       try {
-        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
       } catch (err) {
         console.error(err);
         setStatus('Нет доступа к микрофону', false);
@@ -157,9 +279,10 @@
 
         if (msg.type === 'peer-joined') {
           setStatus('Спикер подключён, ожидание аудио...', true);
-          // Спикер (Electron) создаёт offer, оператор только отвечает
         } else if (msg.type === 'peer-left') {
           setStatus('Спикер отключился', false);
+        } else if (msg.type === 'audio') {
+          queueRelayPlayback(msg.payload, msg);
         } else if (msg.type === 'offer') {
           setStatus('Получен offer, создаём answer...', true);
           await handleOffer(msg.payload);
@@ -174,6 +297,7 @@
         }
       };
 
+      startRelayCapture();
       hangupBtn.disabled = false;
     }
 
@@ -199,10 +323,20 @@
         if (!remoteAudio) {
           remoteAudio = document.createElement('audio');
           remoteAudio.autoplay = true;
+          remoteAudio.playsInline = true;
+          remoteAudio.controls = false;
           remoteAudio.volume = volumeSlider.value / 100;
           document.body.appendChild(remoteAudio);
         }
-        remoteAudio.srcObject = event.streams[0];
+        remoteAudio.srcObject = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
+        try {
+          const playPromise = remoteAudio.play();
+          if (playPromise && typeof playPromise.catch === 'function') {
+            playPromise.catch((e) => console.error('operator remote audio play failed', e));
+          }
+        } catch (e) {
+          console.error('operator remote audio play exception', e);
+        }
       };
 
       pc.onconnectionstatechange = () => {
@@ -247,6 +381,32 @@
         remoteAudio.remove();
         remoteAudio = null;
       }
+      if (relayCaptureNode) {
+        try { relayCaptureNode.disconnect(); } catch (e) {}
+        relayCaptureNode = null;
+      }
+      if (relayCaptureSource) {
+        try { relayCaptureSource.disconnect(); } catch (e) {}
+        relayCaptureSource = null;
+      }
+      if (relayCaptureGain) {
+        try { relayCaptureGain.disconnect(); } catch (e) {}
+        relayCaptureGain = null;
+      }
+      if (relayCaptureCtx) {
+        try { relayCaptureCtx.close(); } catch (e) {}
+        relayCaptureCtx = null;
+      }
+      if (relayPlayNode) {
+        try { relayPlayNode.disconnect(); } catch (e) {}
+        relayPlayNode = null;
+      }
+      if (relayPlayCtx) {
+        try { relayPlayCtx.close(); } catch (e) {}
+        relayPlayCtx = null;
+      }
+      relayPlayQueue = [];
+      relayPlayOffset = 0;
       connectBtn.disabled = false;
       hangupBtn.disabled = true;
       setStatus('Ожидание подключения', false);

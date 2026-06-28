@@ -151,7 +151,43 @@ def get_renewal_price_for_license(license_info):
     return float(tariffs[0].get("price", 10)) if tariffs else 10.0
 
 
-def create_nowpayments_payment(amount_usd: float, user_id: int) -> dict:
+def build_order_description(title: str, lines: list[str], total_usd: float) -> str:
+    parts = [f"{title}: "]
+    parts.append("; ".join(line for line in lines if line))
+    parts.append(f"Итого {total_usd:g} USDT")
+    description = " ".join(part for part in parts if part)
+    return description[:240]
+
+
+async def fetch_device_name_map(client_id: int) -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as hc:
+            resp = await hc.get(f"{API_URL}/api/admin/devices/{client_id}")
+        devices = resp.json() if resp.status_code == 200 else []
+    except Exception:
+        return {}
+
+    device_map = {}
+    for device in devices:
+        license_id = device.get("license_id")
+        if license_id:
+            device_map[int(license_id)] = device.get("device_name") or device.get("device_id") or "Устройство"
+    return device_map
+
+
+async def build_renew_receipt(client_id: int, licenses: list[dict]) -> tuple[str, float]:
+    total = 0.0
+    for lic in licenses:
+        total += get_renewal_price_for_license(lic)
+
+    return build_order_description(
+        "Продление",
+        [f"Лицензии на сумму ${total:g} USDT"],
+        total,
+    ), total
+
+
+def create_nowpayments_payment(amount_usd: float, user_id: int, order_description: str = "") -> dict:
     """Создаёт платёж в NOWPayments"""
     try:
         headers = {
@@ -163,7 +199,7 @@ def create_nowpayments_payment(amount_usd: float, user_id: int) -> dict:
             'price_currency': 'usd',
             'pay_currency': 'usdttrc20',
             'order_id': f'hameleon_{user_id}_{int(datetime.now().timestamp())}',
-            'order_description': f'HAMELEONWEB license for user {user_id}',
+            'order_description': order_description or f'HAMELEONWEB order for user {user_id}',
         }
         response = requests.post(
             'https://api.nowpayments.io/v1/payment',
@@ -211,8 +247,14 @@ async def activate_after_payment(payment_id: str, info: dict):
     amount_usd = info['amount_usd']
     amount_cents = int(amount_usd * 100)
     ptype = info.get('type', 'topup')
+    tariff = info.get('tariff', {})
+    qty = int(info.get('qty', 1) or 1)
 
     try:
+        credit_reason = 'topup'
+        if ptype == 'renew':
+            credit_reason = 'license_renewal'
+
         # 1. Credit balance via API
         async with httpx.AsyncClient(timeout=15.0) as hc:
             await hc.post(f"{API_URL}/api/balance/credit", json={
@@ -220,7 +262,7 @@ async def activate_after_payment(payment_id: str, info: dict):
                 'client_id': client_id,
                 'amount_cents': amount_cents,
                 'invoice_id': payment_id,
-                'reason': 'topup',
+                'reason': credit_reason,
             })
 
         if ptype == 'renew':
@@ -246,8 +288,6 @@ async def activate_after_payment(payment_id: str, info: dict):
             )
 
         elif ptype == 'license':
-            tariff = info.get('tariff', {})
-            qty = info.get('qty', 1)
             license_days = 30
 
             # Create new license via API
@@ -283,6 +323,7 @@ async def activate_after_payment(payment_id: str, info: dict):
                     f"Активна до: <b>{expires}</b>\n\n"
                     f"Приложение обновится автоматически."
                 )
+
         else:
             async with httpx.AsyncClient(timeout=10.0) as hc:
                 r = await hc.get(f"{API_URL}/api/admin/balance/{client_id}")
@@ -377,6 +418,7 @@ class BuyFlow(StatesGroup):
     confirming = State()
 
 class RenewFlow(StatesGroup):
+    selecting_mode = State()
     confirming = State()
 
 # Main Menu
@@ -491,14 +533,14 @@ async def select_package(callback: CallbackQuery, state: FSMContext):
 
 
     std_price = float(tariff.get('price', 0))
-
     pricing_text = f"💰 <b>${std_price:g} USDT / {tariff.get('period', 'мес')}</b>"
+    qty_label = "количество лицензий"
 
     await callback.message.edit_text(
         f"<b>{tariff['name']}</b>\n\n"
         f"{pricing_text}\n\n"
         f"{tariff.get('desc', '')}\n\n"
-        f"✏️ Введите количество лицензий цифрой:",
+        f"✏️ Введите {qty_label} цифрой:",
         
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[{"text": "◀️ Назад", "callback_data": "menu:buy"}]]),
         parse_mode="HTML"
@@ -520,6 +562,14 @@ async def quantity_as_number(message: Message, state: FSMContext):
     await state.update_data(qty=qty)
     unit = get_tariff_unit_price(tariff, qty)
     total = unit * qty
+    item_name = tariff.get("name", "Лицензия")
+    receipt = build_order_description(
+        f"Покупка лицензии {item_name}",
+        [f"{item_name} × {qty} — ${unit:g} USDT"],
+        total,
+    )
+
+    await state.update_data(qty=qty, order_description=receipt)
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [{"text": "💳 Оплатить (NOWPayments)", "callback_data": "pay:nowpayments"}],
@@ -553,11 +603,16 @@ async def pay_nowpayments(callback: CallbackQuery, state: FSMContext):
     tariff = data.get("selected_tariff") or {}
     qty = data.get("qty", 1)
     total = get_tariff_total_price(tariff, qty)
+    order_description = data.get("order_description") or build_order_description(
+        f"Покупка {tariff.get('name', 'лицензии')}",
+        [f"{tariff.get('name', 'Тариф')} × {qty} — ${float(tariff.get('price', 0) or 0):g} USDT"],
+        total,
+    )
     user_id = callback.from_user.id
 
     await callback.message.edit_text("⏳ Создаю платёж...")
 
-    invoice = await asyncio.to_thread(create_nowpayments_payment, total, user_id)
+    invoice = await asyncio.to_thread(create_nowpayments_payment, total, user_id, order_description)
 
     if invoice.get('error'):
         details = invoice.get('details') or invoice.get('exception') or ''
@@ -578,14 +633,16 @@ async def pay_nowpayments(callback: CallbackQuery, state: FSMContext):
     # Register for background polling
     if payment_id:
         data_st = await state.get_data()
+        ptype = 'license'
         pending_payments[payment_id] = {
             'client_id': data_st.get('client_id', user_id),
             'tg_id': user_id,
             'chat_id': callback.message.chat.id,
             'amount_usd': total,
-            'type': 'license',
+            'type': ptype,
             'tariff': tariff,
             'qty': qty,
+            'order_description': order_description,
             'created_at': datetime.utcnow().timestamp(),
         }
 
@@ -597,7 +654,7 @@ async def pay_nowpayments(callback: CallbackQuery, state: FSMContext):
         f"Сеть: <b>{network}</b>\n"
         f"Адрес:\n<code>{pay_address}</code>\n\n"
         f"⏰ Платёж действителен 1 час\n"
-        f"После оплаты лицензия будет активирована автоматически и придёт уведомление.",
+        f"После оплаты заказ будет активирован автоматически и придёт уведомление.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[{"text": "◀️ В меню", "callback_data": "nav:menu"}]]),
         parse_mode="HTML"
     )
@@ -605,7 +662,7 @@ async def pay_nowpayments(callback: CallbackQuery, state: FSMContext):
 
 @router.message(BuyFlow.selecting_quantity)
 async def quantity_text_invalid(message: Message):
-    await message.answer("❌ Введите количество лицензий цифрой. Например: 1, 5 или 10.")
+    await message.answer("❌ Введите количество цифрой. Например: 1, 5 или 10.")
 
 @router.callback_query(F.data == "menu:licenses")
 async def menu_licenses(callback: CallbackQuery):
@@ -695,34 +752,60 @@ async def menu_renew(callback: CallbackQuery, state: FSMContext):
         )
         return
 
-    # Price = one renewal per license (trial or active), based on each license's tariff
-    lic_count = len(active_lics)
-    total = sum(get_renewal_price_for_license(l) for l in active_lics)
-
     lic_lines = ""
+    base_total = 0.0
     for l in active_lics:
         expires = l.get('expires_at', '—')[:10] if l.get('expires_at') else '—'
         kind = "ДЕМО" if l.get('status') == 'trial' else "ЛИЦЕНЗИЯ"
         unit_price = get_renewal_price_for_license(l)
+        base_total += unit_price
         lic_lines += f"  • {kind} <code>{l.get('license_key', '—')}</code> (до {expires}) — ${unit_price:g} USDT\n"
 
-    await state.update_data(renew_client_id=client_id, renew_total=total, renew_count=lic_count)
+    await state.update_data(renew_client_id=client_id, renew_count=len(active_lics), renew_licenses=active_lics)
+    await state.set_state(RenewFlow.confirming)
 
     await callback.message.edit_text(
         f"🔄 <b>Продление подписки</b>\n\n"
         f"{lic_lines}\n"
-        f"� Лицензий для продления: <b>{lic_count}</b>\n"
-        f"💰 Стоимость (30 дней): <b>${total:g} USDT</b>\n\n"
-        f"Оплата криптовалютой USDT (TRC20)",
+        f"Лицензий для продления: <b>{len(active_lics)}</b>\n"
+        f"Стандартное продление: <b>${base_total:g} USDT</b>\n"
+        f"Выберите вариант оплаты:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [{"text": f"💳 Оплатить ${total:g} USDT", "callback_data": "renew:pay"}],
+            [{"text": f"💳 Продлить стандартную — ${base_total:g} USDT", "callback_data": "renew:base"}],
             [{"text": "◀️ Назад", "callback_data": "nav:menu"}]
         ]),
         parse_mode="HTML"
     )
+
+
+@router.callback_query(F.data == "renew:base")
+async def renew_base(callback: CallbackQuery, state: FSMContext):
+    await safe_callback_answer(callback)
+    data = await state.get_data()
+    client_id = data.get("renew_client_id")
+    licenses = data.get("renew_licenses") or []
+    if not client_id or not licenses:
+        await callback.message.edit_text(
+            "❌ Не удалось определить лицензии для продления.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[{"text": "◀️ Назад", "callback_data": "menu:renew"}]])
+        )
+        return
+
+    receipt, total = await build_renew_receipt(client_id, licenses)
+    await state.update_data(renew_total=total, renew_type="renew", renew_receipt=receipt)
     await state.set_state(RenewFlow.confirming)
 
-
+    await callback.message.edit_text(
+        f"📋 <b>Подтверждение оплаты</b>\n\n"
+        f"Продление стандартных лицензий: <b>{len(licenses)}</b> шт.\n"
+        f"Сумма к оплате: <b>${total:g} USDT</b>\n\n"
+        f"После оплаты стандартные лицензии будут продлены на 30 дней.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [{"text": f"💳 Оплатить ${total:g} USDT", "callback_data": "renew:pay"}],
+            [{"text": "◀️ Назад", "callback_data": "menu:renew"}],
+        ]),
+        parse_mode="HTML"
+    )
 @router.callback_query(F.data == "renew:pay", RenewFlow.confirming)
 async def renew_pay(callback: CallbackQuery, state: FSMContext):
     await safe_callback_answer(callback)
@@ -736,11 +819,17 @@ async def renew_pay(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     total = data.get('renew_total', 0)
     client_id = data.get('renew_client_id')
+    renew_type = data.get('renew_type', 'renew')
+    order_description = data.get('renew_receipt') or build_order_description(
+        "Продление",
+        [f"Лицензии на сумму ${total:g} USDT"],
+        total,
+    )
     tg_id = callback.from_user.id
 
     await callback.message.edit_text("⏳ Создаю счёт на продление...")
 
-    invoice = await asyncio.to_thread(create_nowpayments_payment, total, tg_id)
+    invoice = await asyncio.to_thread(create_nowpayments_payment, total, tg_id, order_description)
 
     if invoice.get('error'):
         details = invoice.get('details') or invoice.get('exception') or ''
@@ -765,7 +854,8 @@ async def renew_pay(callback: CallbackQuery, state: FSMContext):
             'tg_id': tg_id,
             'chat_id': callback.message.chat.id,
             'amount_usd': total,
-            'type': 'renew',
+            'type': renew_type,
+            'order_description': order_description,
             'created_at': datetime.utcnow().timestamp(),
         }
 
@@ -777,7 +867,7 @@ async def renew_pay(callback: CallbackQuery, state: FSMContext):
         f"Сеть: <b>{network}</b>\n"
         f"Адрес:\n<code>{pay_address}</code>\n\n"
         f"⏰ Счёт действителен 1 час\n"
-        f"После оплаты все лицензии будут продлены на 30 дней автоматически.",
+        f"После оплаты заказ будет продлён автоматически.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[{"text": "◀️ В меню", "callback_data": "nav:menu"}]]),
         parse_mode="HTML"
     )

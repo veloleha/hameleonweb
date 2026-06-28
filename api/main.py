@@ -185,6 +185,21 @@ class License(Base):
     package_id = Column(Integer, ForeignKey("packages.id"))
     tariff_id = Column(String(50))
 
+
+class LicenseAddon(Base):
+    __tablename__ = "license_addons"
+
+    id = Column(Integer, primary_key=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
+    license_id = Column(Integer, ForeignKey("licenses.id"), unique=True, nullable=False)
+    addon_code = Column(String(50), nullable=False)
+    addon_key = Column(String(100), unique=True, nullable=False)
+    status = Column(String(50), default="active")
+    activated_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime)
+    quantity = Column(Integer, default=1)
+    invoice_id = Column(String(200))
+
 class AuthCode(Base):
 
     __tablename__ = "auth_codes"
@@ -2198,6 +2213,19 @@ async def auto_renew_licenses():
                     TARIFF_PRICES = {"solo": 1000, "rds": 30000}
 
                     renewal_cents = TARIFF_PRICES.get((license.tariff_id or "solo").lower(), 1000)
+                    addon_cents = 0
+
+                    addon_res = await db.execute(
+                        select(LicenseAddon).where(
+                            LicenseAddon.license_id == license.id,
+                            LicenseAddon.addon_code == "sufler",
+                            LicenseAddon.status == "active",
+                            LicenseAddon.expires_at > now,
+                        )
+                    )
+                    addon = addon_res.scalar_one_or_none()
+                    if addon:
+                        addon_cents = 15000
 
                     if renewal_cents == 1000 and license.package_id:
 
@@ -2213,17 +2241,22 @@ async def auto_renew_licenses():
 
                     balance = client.balance_usd or 0
 
+                    total_cents = renewal_cents + addon_cents
 
 
-                    if balance >= renewal_cents:
+
+                    if balance >= total_cents:
 
                         # Deduct and extend
 
-                        client.balance_usd = balance - renewal_cents
+                        client.balance_usd = balance - total_cents
 
                         license.expires_at = license.expires_at + timedelta(days=30)
 
                         license.status = "active"
+
+                        if addon:
+                            addon.expires_at = addon.expires_at + timedelta(days=30)
 
 
 
@@ -2231,9 +2264,9 @@ async def auto_renew_licenses():
 
                             client_id=client.id,
 
-                            amount_cents=-renewal_cents,
+                            amount_cents=-total_cents,
 
-                            reason="license_renewal",
+                            reason="license_renewal_sufler" if addon else "license_renewal",
 
                             invoice_id=license.license_key,
 
@@ -2249,17 +2282,19 @@ async def auto_renew_licenses():
 
                         if TELEGRAM_BOT_TOKEN and client.telegram_id:
 
+                            addon_note = "\nМодуль суфлирования тоже продлён на 30 дней." if addon else ""
                             msg = (
 
                                 f"✅ <b>Лицензия продлена!</b>\n\n"
 
                                 f"Ключ: <code>{license.license_key}</code>\n"
 
-                                f"Списано: ${renewal_cents/100:.2f}\n"
+                                f"Списано: ${total_cents/100:.2f}\n"
 
                                 f"Остаток баланса: ${client.balance_usd/100:.2f}\n"
 
                                 f"Активна до: {(license.expires_at).strftime('%d.%m.%Y')}"
+                                f"{addon_note}"
 
                             )
 
@@ -2358,6 +2393,7 @@ async def admin_issue_license(request: Request, db: AsyncSession = Depends(get_d
     client_id = int(body.get("client_id", 0))
 
     days = int(body.get("days", 30))
+    include_sufler = bool(body.get("include_sufler", False))
 
     quantity = int(body.get("quantity", 1))
 
@@ -2494,6 +2530,90 @@ async def admin_issue_license(request: Request, db: AsyncSession = Depends(get_d
     }
 
 
+@app.post("/api/admin/issue-addon")
+async def admin_issue_addon(request: Request, db: AsyncSession = Depends(get_db)):
+    """Issue or extend addon subscriptions for a client after confirmed payment (called by bot)."""
+    body = await request.json()
+
+    if body.get("secret") != JWT_SECRET:
+        raise HTTPException(403, "Forbidden")
+
+    client_id = int(body.get("client_id", 0))
+    days = int(body.get("days", 30))
+    quantity = int(body.get("quantity", 1))
+    addon_code = (body.get("addon_code") or "sufler").lower()
+    invoice_id = body.get("invoice_id")
+    now = datetime.utcnow()
+    expires_at = now + timedelta(days=days)
+
+    lic_res = await db.execute(
+        select(License).where(
+            License.client_id == client_id,
+            License.status.in_(["active", "trial"]),
+            License.expires_at > now,
+        ).order_by(License.activated_at.asc())
+    )
+    active_licenses = lic_res.scalars().all()
+
+    if not active_licenses:
+        raise HTTPException(400, "No active licenses available for addon issuance")
+
+    if quantity < 1:
+        raise HTTPException(400, "Invalid quantity")
+
+    if quantity > len(active_licenses):
+        raise HTTPException(400, "Addon quantity exceeds the number of active licenses")
+
+    issued = []
+    for lic in active_licenses[:quantity]:
+        addon_res = await db.execute(
+            select(LicenseAddon).where(
+                LicenseAddon.license_id == lic.id,
+                LicenseAddon.addon_code == addon_code,
+            )
+        )
+        addon = addon_res.scalar_one_or_none()
+        if addon and addon.status == "active" and addon.expires_at and addon.expires_at > now:
+            addon.expires_at = addon.expires_at + timedelta(days=days)
+        else:
+            addon = LicenseAddon(
+                client_id=client_id,
+                license_id=lic.id,
+                addon_code=addon_code,
+                addon_key=generate_license_key(),
+                activated_at=now,
+                expires_at=expires_at,
+                status="active",
+                quantity=1,
+                invoice_id=invoice_id,
+            )
+            db.add(addon)
+            await db.flush()
+
+        issued.append({
+            "license_key": lic.license_key,
+            "addon_key": addon.addon_key,
+            "expires_at": addon.expires_at.isoformat() if addon.expires_at else None,
+        })
+
+    await db.commit()
+
+    if quantity == 1:
+        return {
+            "addon_key": issued[0]["addon_key"],
+            "license_key": issued[0]["license_key"],
+            "expires_at": issued[0]["expires_at"],
+            "addon_code": addon_code,
+        }
+
+    return {
+        "created": len(issued),
+        "addons": issued,
+        "expires_at": expires_at.isoformat(),
+        "addon_code": addon_code,
+    }
+
+
 
 @app.post("/api/admin/renew-all-licenses")
 async def admin_renew_all_licenses(request: Request, db: AsyncSession = Depends(get_db)):
@@ -2509,6 +2629,7 @@ async def admin_renew_all_licenses(request: Request, db: AsyncSession = Depends(
     client_id = int(body.get("client_id", 0))
 
     days = int(body.get("days", 30))
+    include_sufler = bool(body.get("include_sufler", False))
 
     now = datetime.utcnow()
 
@@ -2531,6 +2652,7 @@ async def admin_renew_all_licenses(request: Request, db: AsyncSession = Depends(
     licenses = result.scalars().all()
 
     renewed = []
+    addon_renewed = 0
 
 
 
@@ -2539,6 +2661,36 @@ async def admin_renew_all_licenses(request: Request, db: AsyncSession = Depends(
         lic.expires_at = lic.expires_at + timedelta(days=days)
 
         lic.status = "active"
+
+        if include_sufler:
+            addon_res = await db.execute(
+                select(LicenseAddon).where(
+                    LicenseAddon.license_id == lic.id,
+                    LicenseAddon.addon_code == "sufler",
+                )
+            )
+            addon = addon_res.scalar_one_or_none()
+            if addon:
+                if addon.expires_at and addon.expires_at > now:
+                    addon.expires_at = addon.expires_at + timedelta(days=days)
+                else:
+                    addon.expires_at = now + timedelta(days=days)
+                addon.status = "active"
+                addon_renewed += 1
+            else:
+                addon = LicenseAddon(
+                    client_id=client_id,
+                    license_id=lic.id,
+                    addon_code="sufler",
+                    addon_key=generate_license_key(),
+                    activated_at=now,
+                    expires_at=now + timedelta(days=days),
+                    status="active",
+                    quantity=1,
+                    invoice_id=lic.license_key,
+                )
+                db.add(addon)
+                addon_renewed += 1
 
         renewed.append(lic)
 
@@ -2551,6 +2703,7 @@ async def admin_renew_all_licenses(request: Request, db: AsyncSession = Depends(
     return {
 
         "renewed": len(renewed),
+        "addon_renewed": addon_renewed,
 
         "licenses": [
 
@@ -2601,6 +2754,8 @@ async def admin_get_licenses(client_id: int, db: AsyncSession = Depends(get_db))
     return [
 
         {
+
+            "id": lic.id,
 
             "license_key": lic.license_key,
 
@@ -2852,13 +3007,13 @@ async def get_latest_download():
 
     return {
 
-        "version": "0.1.0",
+        "version": "0.3.1",
 
-        "download_url": "/download/HAMELEONWEB Setup 0.1.0.exe",
+        "download_url": "/download/HAMELEONWEB-Setup-0.3.1.exe",
 
-        "size_mb": 85,
+        "size_mb": 94,
 
-        "release_date": "2026-06-16"
+        "release_date": "2026-06-26"
 
     }
 
@@ -3103,6 +3258,46 @@ async def track_download(request: Request, db: AsyncSession = Depends(get_db)):
     await db.commit()
 
     return {"ok": True}
+
+
+
+MAINTENANCE_FLAG = Path("/data/maintenance.flag")
+
+
+
+class SiteToggleRequest(BaseModel):
+
+    enabled: bool
+
+
+
+@app.get("/api/admin-panel/site-status")
+
+async def admin_site_status(_=Depends(verify_admin_token)):
+
+    return {"enabled": not MAINTENANCE_FLAG.exists()}
+
+
+
+@app.post("/api/admin-panel/toggle-site")
+
+async def admin_toggle_site(data: SiteToggleRequest, _=Depends(verify_admin_token)):
+
+    try:
+
+        if data.enabled:
+
+            MAINTENANCE_FLAG.unlink(missing_ok=True)
+
+        else:
+
+            MAINTENANCE_FLAG.write_text("")
+
+        return {"enabled": not MAINTENANCE_FLAG.exists()}
+
+    except Exception as e:
+
+        raise HTTPException(500, f"Failed to toggle site: {e}")
 
 
 
