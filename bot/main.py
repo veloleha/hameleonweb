@@ -9,6 +9,7 @@ import asyncio
 import logging
 import requests
 import time
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import load_dotenv
@@ -25,7 +26,7 @@ except AttributeError:
 import httpx
 
 from aiogram import Bot, Dispatcher, Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -493,9 +494,14 @@ async def show_home(tg_user, target: Message | CallbackQuery):
 <b>Что делает:</b>
 • Записывает входящие и исходящие звонки
 • Сохраняет разговоры в MP3
-• Подставляет номер собеседника в имя файла
 • Поддерживает несколько WhatsApp-аккаунтов
 • Демо-период 7 дней
+
+<b>Модуль суфлёра:</b>
+• Дистанционная суфлёрка для оператора
+• WebRTC-сигналинг
+• Привязка к лицензии
+• 150 USDT / мес / лицензия
 
 <b>Как начать:</b>
 1. Скачайте приложение
@@ -593,7 +599,8 @@ async def back_to_menu(callback: CallbackQuery):
 @router.callback_query(F.data == "download:request")
 async def download_request(callback: CallbackQuery):
     await safe_callback_answer(callback)
-    await callback.message.edit_text("⏳ Получаю информацию о последней версии...")
+    url = None
+    tmp_path = None
     try:
         async with httpx.AsyncClient(timeout=15.0) as hc:
             r = await hc.get(f"{WEBSITE_URL}/latest.json")
@@ -614,31 +621,48 @@ async def download_request(callback: CallbackQuery):
         if notes:
             text += f"\n\n📝 <b>Что нового:</b>\n{notes}"
 
-        try:
-            await bot.send_document(
-                chat_id=callback.message.chat.id,
-                document=url,
-                caption=text,
-                parse_mode="HTML"
-            )
-        except Exception as e:
-            logger.warning(f"send_document failed: {e}, sending link instead")
-            await callback.message.edit_text(
-                f"{text}\n\n👇 Ссылка для скачивания:\n{url}",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [{"text": "⬇️ Скачать", "url": url}],
-                    [{"text": "◀️ В меню", "callback_data": "nav:menu"}]
-                ]),
-                parse_mode="HTML"
-            )
-        else:
-            await callback.message.delete()
+        await callback.message.edit_text("⏳ Скачиваю файл... Это может занять несколько секунд.")
+
+        # Stream download from website to local temp file
+        tmp_path = Path(tempfile.gettempdir()) / filename
+        async with httpx.AsyncClient(timeout=300.0) as hc:
+            async with hc.stream('GET', url) as resp:
+                if resp.status_code != 200:
+                    raise Exception(f"Ошибка скачивания: HTTP {resp.status_code}")
+                with open(tmp_path, 'wb') as f:
+                    async for chunk in resp.aiter_bytes():
+                        f.write(chunk)
+
+        await bot.send_document(
+            chat_id=callback.message.chat.id,
+            document=FSInputFile(tmp_path, filename=filename),
+            caption=text,
+            parse_mode="HTML"
+        )
+        await callback.message.delete()
+
     except Exception as exc:
         logger.error(f"download_request error: {exc}")
-        await callback.message.edit_text(
-            f"❌ Не удалось получить информацию о версии: {exc}",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[{"text": "◀️ В меню", "callback_data": "nav:menu"}]])
+        fallback_text = (
+            f"❌ Не удалось отправить файл: {exc}\n\n"
+            f"Попробуйте скачать напрямую с сайта:"
         )
+        if url:
+            fallback_text += f"\n{url}"
+        fallback_rows = [[{"text": "◀️ В меню", "callback_data": "nav:menu"}]]
+        if url:
+            fallback_rows.insert(0, [{"text": "⬇️ Скачать", "url": url}])
+        await callback.message.edit_text(
+            fallback_text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=fallback_rows),
+            parse_mode="HTML"
+        )
+    finally:
+        if tmp_path:
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
 
 # Buy Flow
 @router.callback_query(F.data == "menu:buy")
