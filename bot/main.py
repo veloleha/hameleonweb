@@ -46,6 +46,7 @@ TARIFFS_PATH = Path(
         str(BASE_DIR / "tariffs.json"),
     )
 )
+DEFAULT_DOWNLOAD_FILE = os.getenv("DEFAULT_DOWNLOAD_FILE", "HAMELEONWEB-Setup-0.3.1.exe")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -499,7 +500,6 @@ async def show_home(tg_user, target: Message | CallbackQuery):
 
 <b>Модуль суфлёра:</b>
 • Дистанционная суфлёрка для оператора
-• WebRTC-сигналинг
 • Привязка к лицензии
 • 150 USDT / мес / лицензия
 
@@ -602,14 +602,25 @@ async def download_request(callback: CallbackQuery):
     url = None
     tmp_path = None
     try:
-        async with httpx.AsyncClient(timeout=15.0) as hc:
-            r = await hc.get(f"{WEBSITE_URL}/latest.json")
-            latest = r.json() if r.status_code == 200 else {}
+        latest = {}
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as hc:
+                r = await hc.get(f"{WEBSITE_URL}/latest.json")
+                latest = r.json() if r.status_code == 200 else {}
+        except Exception as exc:
+            logger.warning(f"latest.json недоступен: {exc}")
+
+        # Fallback to default file when website is in maintenance mode
         if not latest:
-            raise Exception("latest.json пуст")
+            latest = {
+                'version': '—',
+                'file': DEFAULT_DOWNLOAD_FILE,
+                'url': f"{WEBSITE_URL}/download/{DEFAULT_DOWNLOAD_FILE}",
+                'notes': '',
+            }
 
         version = latest.get('version', '—')
-        filename = latest.get('file', '—')
+        filename = latest.get('file') or DEFAULT_DOWNLOAD_FILE
         url = latest.get('url') or f"{WEBSITE_URL}/download/{filename}"
         notes = latest.get('notes', '')
 
