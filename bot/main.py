@@ -183,6 +183,16 @@ async def fetch_device_name_map(client_id: int) -> dict:
     return device_map
 
 
+def clean_device_name(name: str) -> str:
+    """Remove trailing parenthesized username (e.g. 'PC (alex.it)') from device name."""
+    if not name:
+        return "Устройство"
+    name = name.strip()
+    if ' (' in name and name.endswith(')'):
+        name = name.rsplit(' (', 1)[0]
+    return name.strip() or "Устройство"
+
+
 async def build_renew_receipt(client_id: int, licenses: list[dict], include_sufler: bool = False) -> tuple[str, list[str], float]:
     device_map = await fetch_device_name_map(client_id)
     lines = []
@@ -194,7 +204,7 @@ async def build_renew_receipt(client_id: int, licenses: list[dict], include_sufl
         expires = lic.get('expires_at', '—')[:10] if lic.get('expires_at') else '—'
         kind = "ДЕМО" if lic.get('status') == 'trial' else "ЛИЦЕНЗИЯ"
         license_key = lic.get('license_key', '—')
-        device_name = device_map.get(int(lic.get('id', 0)), "Устройство")
+        device_name = clean_device_name(device_map.get(int(lic.get('id', 0)), "Устройство"))
 
         line = f"{device_name} — {kind} <code>{license_key}</code> (до {expires}) — ${unit_price:g} USDT"
         lines.append(line)
